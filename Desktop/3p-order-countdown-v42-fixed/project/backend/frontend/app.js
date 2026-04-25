@@ -1,17 +1,6 @@
-// Firebase is loaded lazily so a slow/failed network never blocks the splash screen
-let app = null, messaging = null, auth = null, getToken = null, onMessage = null;
-(async () => {
-  try {
-    const fb = await import("./firebase-config.js");
-    app = fb.app;
-    messaging = fb.messaging;
-    auth = fb.auth;
-    getToken = fb.getToken;
-    onMessage = fb.onMessage;
-  } catch (e) {
-    console.warn("Firebase config failed to load:", e);
-  }
-})();
+import { app, messaging, auth, getToken, onMessage } from "./firebase-config.js";
+
+const shopWhatsAppNumber = "212688943959";
 
 let categories = [
   {
@@ -278,7 +267,7 @@ const state = {
     minimumDeliveryPrice: 0,
     deliveryZones: [],
     promoCodes: [],
-    shopWhatsAppNumber,
+    shopWhatsAppNumber: shopWhatsAppNumber,
     minimumOrderAmount: 0,
     preparationTimeBase: 20,
     isStoreOpen: true,
@@ -421,21 +410,7 @@ let nativeAuthListenerBound = false;
 let deferredInstallPrompt = null;
 let splashFailsafeTimer = null;
 
-const shopWhatsAppNumber = "212688943959";
 const firebaseSdkVersion = "10.9.0";
-const defaultShopSettings = {
-  shopLatitude: 30.4017949,
-  shopLongitude: -9.5510469,
-  deliveryPricePerKm: 5,
-  minimumDeliveryPrice: 0,
-  deliveryZones: [],
-  promoCodes: [],
-  shopWhatsAppNumber,
-  minimumOrderAmount: 0,
-  preparationTimeBase: 20,
-  isStoreOpen: true,
-  closedMessage: "Nous sommes fermes actuellement. Merci de revenir pendant nos horaires d'ouverture."
-};
 
 const money = value => `${Number.isInteger(value) ? value : value.toFixed(2)} DHS`;
 
