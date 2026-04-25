@@ -1,0 +1,23 @@
+plugins {
+    id "com.android.application"
+    id "com.google.gms.google-services"
+}
+
+android {
+    namespace "com.threep.chickenpops"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.threep.chickenpops"
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName "1.0"
+    }
+}
+
+dependencies {
+    implementation project(":capacitor-android")
+}
+
+apply from: "capacitor.build.gradle"

@@ -1,0 +1,22 @@
+{
+  "name": "3p-menu-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node backend/server.mjs",
+    "start": "node backend/server.mjs",
+    "cap:sync": "cap sync android",
+    "cap:open:android": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor-firebase/authentication": "^8.2.0",
+    "@capacitor/android": "^8.3.1",
+    "@capacitor/cli": "^8.3.1",
+    "@capacitor/core": "^8.3.1",
+    "@capacitor/geolocation": "^8.2.0",
+    "@capacitor/push-notifications": "^8.0.3",
+    "firebase-admin": "^12.1.0",
+    "pg": "^8.16.3"
+  }
+}
