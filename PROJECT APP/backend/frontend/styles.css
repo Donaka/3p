@@ -54,7 +54,7 @@ button:active {
 
 .phone-shell {
   position: relative;
-  width: min(430px, 100vw);
+  width: min(480px, 100vw);
   height: min(920px, 100vh);
   overflow: hidden;
   background:
@@ -365,6 +365,10 @@ button:active {
     radial-gradient(circle at top right, rgba(255, 139, 61, 0.18), transparent 34%),
     linear-gradient(180deg, rgba(31, 13, 10, 0.96), rgba(20, 11, 11, 0.92));
   box-shadow: 0 16px 32px rgba(0, 0, 0, 0.26);
+}
+
+#installBanner {
+  display: none !important;
 }
 
 .install-banner.hidden,
@@ -2426,6 +2430,101 @@ button:active {
   gap: 14px;
 }
 
+.phone-login-form {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top right, rgba(255, 139, 61, 0.08), transparent 32%),
+    linear-gradient(180deg, rgba(24, 24, 27, 0.95), rgba(13, 13, 16, 0.94));
+  box-shadow: 0 18px 30px rgba(0, 0, 0, 0.22);
+}
+
+.auth-field {
+  display: grid;
+  gap: 8px;
+}
+
+.auth-field span {
+  color: #f3f4f6;
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.auth-field input {
+  width: 100%;
+  min-height: 52px;
+  padding: 0 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: white;
+  outline: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}
+
+.auth-field input:focus {
+  border-color: rgba(255, 0, 0, 0.55);
+  box-shadow: 0 0 0 4px rgba(255, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.auth-submit {
+  width: 100%;
+  min-height: 54px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ff2929, #d60000);
+  color: white;
+  font-weight: 950;
+  box-shadow: 0 14px 30px rgba(214, 0, 0, 0.28);
+}
+
+.auth-submit:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.login-error {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.loading-state {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  gap: 12px;
+  text-align: center;
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  color: #e5e7eb;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 28px 20px;
+}
+
+.loading-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.14);
+  border-top-color: #ff3b30;
+  animation: spin 0.8s linear infinite;
+}
+
+.error-state {
+  color: #fecaca;
+  border-color: rgba(239, 68, 68, 0.24);
+  background: rgba(127, 29, 29, 0.2);
+}
+
 .account-install-card {
   display: grid;
   gap: 10px;
@@ -2540,6 +2639,12 @@ button:active {
   color: #ffd47d;
   font-size: 0.72rem;
   font-weight: 900;
+}
+
+.order-status-pill,
+.notification-tag,
+.notification-cta {
+  letter-spacing: 0;
 }
 
 .order-timeline {
@@ -2835,6 +2940,12 @@ button:active {
   .bottom-nav {
     left: 18px;
     right: 18px;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 

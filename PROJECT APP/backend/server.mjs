@@ -325,6 +325,10 @@ function trimOrNull(value) {
   return trimmed || null;
 }
 
+function normalizePhone(value) {
+  return String(value ?? "").replace(/[^\d]/g, "").trim();
+}
+
 function normalizeSettings(settings = {}) {
   const rawHeroImages = Array.isArray(settings.heroImages)
     ? settings.heroImages
@@ -456,6 +460,19 @@ function mapCustomerRow(row) {
     totalOrders: Number(row.total_orders || 0),
     totalSpent: Number(row.total_spent || 0),
     lastOrderAt: row.last_order_at
+  };
+}
+
+function mapCustomerSession(row) {
+  const phone = String(row?.phone || "").trim();
+  const fallbackName = phone ? `Client ${phone.slice(-4)}` : "Client 3P";
+  return {
+    uid: phone ? `phone:${phone}` : `customer:${row?.id || ""}`,
+    displayName: String(row?.name || "").trim() || fallbackName,
+    email: "",
+    photoURL: "",
+    phone,
+    provider: "phone-local"
   };
 }
 
@@ -833,6 +850,55 @@ async function upsertCustomer(client, order) {
     order.total
   ]);
   return result.rows[0];
+}
+
+async function authenticateCustomerByPhone({ phone = "", name = "" } = {}) {
+  return withDatabase(async () => {
+    const normalizedPhone = normalizePhone(phone);
+    const normalizedName = String(name || "").trim();
+    if (!normalizedPhone) {
+      throw new Error("Phone number is required");
+    }
+
+    const existingResult = await dbPool.query(`
+      SELECT *
+      FROM customers
+      WHERE phone = $1
+      LIMIT 1
+    `, [normalizedPhone]);
+
+    let customer = existingResult.rows[0] || null;
+    if (customer) {
+      if (normalizedName && normalizedName !== customer.name) {
+        const updatedResult = await dbPool.query(`
+          UPDATE customers
+          SET
+            name = COALESCE(NULLIF($2, ''), name),
+            updated_at = NOW()
+          WHERE id = $1
+          RETURNING *
+        `, [customer.id, normalizedName]);
+        customer = updatedResult.rows[0] || customer;
+      }
+    } else {
+      if (!normalizedName) {
+        throw new Error("Name is required for first login");
+      }
+      const insertedResult = await dbPool.query(`
+        INSERT INTO customers (
+          name, phone, total_orders, total_spent, updated_at
+        )
+        VALUES ($1, $2, 0, 0, NOW())
+        RETURNING *
+      `, [normalizedName, normalizedPhone]);
+      customer = insertedResult.rows[0];
+    }
+
+    return {
+      customer: mapCustomerRow(customer),
+      session: mapCustomerSession(customer)
+    };
+  });
 }
 
 async function createOrderRecord(order) {
@@ -1856,6 +1922,22 @@ const server = createServer(async (request, response) => {
         updatedAt: null,
         error: error.message
       });
+      return;
+    }
+  }
+
+  if (url.pathname === "/api/customer-auth" && request.method === "POST") {
+    try {
+      const body = await readJsonBody(request);
+      const result = await authenticateCustomerByPhone({
+        phone: body.phone,
+        name: body.name
+      });
+      sendJson(response, 200, result);
+      return;
+    } catch (error) {
+      const status = /DATABASE_URL/i.test(error.message) ? 503 : 400;
+      sendJson(response, status, { error: error.message });
       return;
     }
   }

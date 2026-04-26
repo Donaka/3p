@@ -68,17 +68,6 @@
           </div>
         </header>
 
-        <section class="install-banner hidden" id="installBanner" aria-label="Install app">
-          <div class="install-banner-copy">
-            <strong>Installer l'application</strong>
-            <span>Ajoutez 3P CHICKEN POPS a votre ecran d'accueil pour une experience plus rapide.</span>
-          </div>
-          <div class="install-banner-actions">
-            <button class="install-banner-dismiss" id="installDismissButton" type="button" aria-label="Fermer">Plus tard</button>
-            <button class="checkout-button install-banner-button" id="installAppButton" type="button">Installer</button>
-          </div>
-        </section>
-
         <div class="app-view active" id="homeView" data-view="home">
           <section class="store-banner hidden" id="homeStoreBanner">
             <strong>Magasin ferme</strong>
@@ -192,34 +181,29 @@
               </div>
               <div class="account-summary-copy">
                 <p id="accountStatus">Connectez-vous pour suivre vos commandes</p>
-                <h3 id="accountName">Customer account</h3>
-                <small id="accountHelp">Google login is for customers only.</small>
+                <h3 id="accountName">Compte client</h3>
+                <small id="accountHelp">Connectez-vous avec votre numero pour retrouver vos commandes.</small>
               </div>
             </div>
 
             <div class="account-login-state" id="accountLoggedOutState">
-              <p class="account-empty-copy">Connectez-vous pour suivre vos commandes</p>
-              <button class="google-login" id="googleLogin" type="button">
-                <span>G</span>
-                Continuer avec Google
-              </button>
-              <div class="account-install-card">
-                <button class="account-link-row install-support-action hidden" id="accountInstallButton" type="button">
-                  <span class="account-link-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none"><path d="M12 4v9m0 0 3-3m-3 3-3-3M5 16.5v1A2.5 2.5 0 0 0 7.5 20h9a2.5 2.5 0 0 0 2.5-2.5v-1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                  </span>
-                  <span class="account-link-copy">
-                    <strong>Installer l'app</strong>
-                    <small>Ajoutez 3P CHICKEN POPS sur votre ecran d'accueil</small>
-                  </span>
-                  <span class="account-link-arrow" aria-hidden="true">›</span>
-                </button>
-                <p class="ios-install-hint hidden" id="iosInstallHint">Sur iPhone : Partager → Ajouter à l’ecran d’accueil</p>
-              </div>
+              <p class="account-empty-copy">Entrez votre numero pour suivre vos commandes et revenir plus vite la prochaine fois.</p>
+              <form class="phone-login-form" id="phoneLoginForm">
+                <label class="auth-field">
+                  <span>Numero de telephone</span>
+                  <input id="loginPhone" name="loginPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+212 6 00 00 00 00" required>
+                </label>
+                <label class="auth-field">
+                  <span>Nom (si c'est votre premiere visite)</span>
+                  <input id="loginName" name="loginName" type="text" autocomplete="name" placeholder="Votre nom">
+                </label>
+                <p class="login-error hidden" id="accountLoginError" role="status" aria-live="polite"></p>
+                <button class="auth-submit" id="phoneLoginButton" type="submit">Continuer</button>
+              </form>
             </div>
 
             <div class="account-login-state hidden" id="accountLoggedInState">
-              <button class="signout-button" id="googleLogout" type="button">Se deconnecter</button>
+              <button class="signout-button" id="customerLogout" type="button">Se deconnecter</button>
               <div class="account-links">
                 <button class="account-link-row" id="accountOrdersLink" type="button">
                   <span class="account-link-icon" aria-hidden="true">
@@ -251,18 +235,7 @@
                   </span>
                   <span class="account-link-arrow" aria-hidden="true">›</span>
                 </button>
-                <button class="account-link-row install-support-action hidden" id="accountInstallButtonSignedIn" type="button">
-                  <span class="account-link-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none"><path d="M12 4v9m0 0 3-3m-3 3-3-3M5 16.5v1A2.5 2.5 0 0 0 7.5 20h9a2.5 2.5 0 0 0 2.5-2.5v-1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                  </span>
-                  <span class="account-link-copy">
-                    <strong>Installer l'app</strong>
-                    <small>Gardez 3P CHICKEN POPS comme une vraie app</small>
-                  </span>
-                  <span class="account-link-arrow" aria-hidden="true">›</span>
-                </button>
               </div>
-              <p class="ios-install-hint hidden" id="iosInstallHintSignedIn">Sur iPhone : Partager → Ajouter à l’ecran d’accueil</p>
             </div>
           </section>
         </div>
@@ -504,17 +477,6 @@
               <small>+212 688 943 959</small>
             </div>
           </a>
-          <button class="support-action install-support-action hidden" id="supportInstallButton" type="button">
-            <span>
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 3v10m0 0 3.5-3.5M12 13 8.5 9.5M5 15.5v1A2.5 2.5 0 0 0 7.5 19h9A2.5 2.5 0 0 0 19 16.5v-1" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </span>
-            <div>
-              <strong>Installer l'application</strong>
-              <small>Ajoutez 3P CHICKEN POPS sur votre ecran d'accueil</small>
-            </div>
-          </button>
           <div class="about-app">
             <span>
               <svg viewBox="0 0 24 24" aria-hidden="true">

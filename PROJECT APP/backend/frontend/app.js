@@ -1,6 +1,19 @@
-import { app, messaging, auth, getToken, onMessage } from "./firebase-config.js";
+import { messaging, getToken, onMessage } from "./firebase-config.js";
 
 const shopWhatsAppNumber = "212688943959";
+const defaultShopSettings = {
+  shopLatitude: 30.4017949,
+  shopLongitude: -9.5510469,
+  deliveryPricePerKm: 5,
+  minimumDeliveryPrice: 0,
+  deliveryZones: [],
+  promoCodes: [],
+  shopWhatsAppNumber,
+  minimumOrderAmount: 0,
+  preparationTimeBase: 20,
+  isStoreOpen: true,
+  closedMessage: "Nous sommes fermes actuellement. Merci de revenir pendant nos horaires d'ouverture."
+};
 
 let categories = [
   {
@@ -260,19 +273,7 @@ const state = {
   promo: null,
   pendingProduct: null,
   currentView: "home",
-  settings: {
-    shopLatitude: 30.4017949,
-    shopLongitude: -9.5510469,
-    deliveryPricePerKm: 5,
-    minimumDeliveryPrice: 0,
-    deliveryZones: [],
-    promoCodes: [],
-    shopWhatsAppNumber: shopWhatsAppNumber,
-    minimumOrderAmount: 0,
-    preparationTimeBase: 20,
-    isStoreOpen: true,
-    closedMessage: "Nous sommes fermes actuellement. Merci de revenir pendant nos horaires d'ouverture."
-  },
+  settings: { ...defaultShopSettings },
   customer: null,
   cart: new Map()
 };
@@ -352,9 +353,14 @@ const splashScreen = document.querySelector("#splashScreen");
 const accountStatus = document.querySelector("#accountStatus");
 const accountName = document.querySelector("#accountName");
 const accountHelp = document.querySelector("#accountHelp");
-const googleLogin = document.querySelector("#googleLogin");
-const googleLogout = document.querySelector("#googleLogout");
+const phoneLoginForm = document.querySelector("#phoneLoginForm");
+const loginPhone = document.querySelector("#loginPhone");
+const loginName = document.querySelector("#loginName");
+const phoneLoginButton = document.querySelector("#phoneLoginButton");
+const accountLoginError = document.querySelector("#accountLoginError");
+const customerLogout = document.querySelector("#customerLogout");
 const customerName = document.querySelector("#customerName");
+const customerPhoneInput = document.querySelector("#customerPhone");
 const promoCodeInput = document.querySelector("#promoCode");
 const applyPromoButton = document.querySelector("#applyPromo");
 const promoStatus = document.querySelector("#promoStatus");
@@ -395,19 +401,15 @@ let previousCartCount = 0;
 let lastChangedCartKey = "";
 let heroParallaxFrame = null;
 let remoteOrderHistory = null;
-let firebaseAuth = null;
-let firebaseSignInWithRedirect = null;
-let firebaseSignInWithPopup = null;
-let firebaseSignOut = null;
-let firebaseProvider = null;
 let latestNotifications = [];
 let selectedOrderDetails = null;
 let webMessagingInitialized = false;
 let deferredInstallPrompt = null;
 let splashFailsafeTimer = null;
 let authBootstrapResolved = false;
-
-const firebaseSdkVersion = "10.9.0";
+let isMenuLoading = true;
+let menuLoadError = "";
+let isOrdersLoading = false;
 
 const money = value => `${Number.isInteger(value) ? value : value.toFixed(2)} DHS`;
 
@@ -795,15 +797,20 @@ function initLanguageChoice() {
 }
 
 function showLoginError(message) {
-  const safeMessage = String(message || "Connexion Google indisponible.");
-  accountStatus.textContent = "Connexion Google indisponible";
+  const safeMessage = String(message || "Connexion indisponible.");
+  if (accountLoginError) {
+    accountLoginError.textContent = safeMessage;
+    accountLoginError.classList.remove("hidden");
+  }
+  accountStatus.textContent = "Connexion indisponible";
   accountHelp.textContent = safeMessage;
   switchView("account");
 }
 
-function hasFirebaseConfig() {
-  const config = window.firebaseConfig || {};
-  return ["apiKey", "authDomain", "projectId", "appId"].every(key => String(config[key] || "").trim());
+function clearLoginError() {
+  if (!accountLoginError) return;
+  accountLoginError.textContent = "";
+  accountLoginError.classList.add("hidden");
 }
 
 function isStandaloneDisplay() {
@@ -827,14 +834,12 @@ function setInstallBannerDismissed(value) {
 }
 
 function updateInstallUi() {
-  const canInstall = Boolean(deferredInstallPrompt) && !isStandaloneDisplay() && !isInstallBannerDismissed();
-  installBanner?.classList.toggle("hidden", !canInstall);
-  supportInstallButton?.classList.toggle("hidden", !Boolean(deferredInstallPrompt) || isStandaloneDisplay());
-  accountInstallButton?.classList.toggle("hidden", !Boolean(deferredInstallPrompt) || isStandaloneDisplay());
-  accountInstallButtonSignedIn?.classList.toggle("hidden", !Boolean(deferredInstallPrompt) || isStandaloneDisplay());
-  const showIosHint = Boolean(!deferredInstallPrompt && !isStandaloneDisplay() && /iphone|ipad|ipod/i.test(navigator.userAgent || ""));
-  iosInstallHint?.classList.toggle("hidden", !showIosHint);
-  iosInstallHintSignedIn?.classList.toggle("hidden", !showIosHint);
+  installBanner?.classList.add("hidden");
+  supportInstallButton?.classList.add("hidden");
+  accountInstallButton?.classList.add("hidden");
+  accountInstallButtonSignedIn?.classList.add("hidden");
+  iosInstallHint?.classList.add("hidden");
+  iosInstallHintSignedIn?.classList.add("hidden");
 }
 
 async function triggerInstallPrompt() {
@@ -875,7 +880,7 @@ function showCheckoutSuccess(order) {
   if (!checkoutSuccess || !checkoutForm) return;
   successOrderNumber.textContent = `#${order.id}`;
   successOrderTotal.textContent = order.total;
-  successOrderMode.textContent = order.mode === "delivery" ? "Livraison" : "Pickup";
+  successOrderMode.textContent = modeLabel(order.mode);
   checkoutForm.classList.add("hidden");
   checkoutSuccess.classList.remove("hidden");
 }
@@ -918,13 +923,13 @@ function switchView(view) {
 
 function updateAccountUi() {
   const customer = state.customer;
-  const initials = (customer?.displayName || customer?.email || "Customer").trim().slice(0, 1).toUpperCase();
+  const initials = (customer?.displayName || customer?.phone || "Client").trim().slice(0, 1).toUpperCase();
 
-  accountStatus.textContent = customer ? "Connecte avec Google" : "Connectez-vous pour suivre vos commandes";
-  accountName.textContent = customer?.displayName || "Customer account";
-  accountHelp.textContent = customer?.email || "Google login is for customers only.";
-  googleLogin.classList.toggle("hidden", Boolean(customer));
-  googleLogout.classList.toggle("hidden", !customer);
+  accountStatus.textContent = customer ? "Connecte" : "Connectez-vous pour suivre vos commandes";
+  accountName.textContent = customer?.displayName || "Compte client";
+  accountHelp.textContent = customer?.phone
+    ? `Numero enregistre : ${customer.phone}`
+    : "Connectez-vous avec votre numero pour suivre vos commandes et retrouver votre panier.";
   accountLoggedOutState?.classList.toggle("hidden", Boolean(customer));
   accountLoggedInState?.classList.toggle("hidden", !customer);
   accountPageAvatar?.classList.toggle("no-photo", !customer?.photoURL);
@@ -943,59 +948,122 @@ function updateAccountUi() {
   if (customer?.displayName && !customerName.value) {
     customerName.value = customer.displayName;
   }
+  if (customer?.phone && customerPhoneInput && !customerPhoneInput.value) {
+    customerPhoneInput.value = customer.phone;
+  }
+  if (customer?.phone && loginPhone && !loginPhone.value) {
+    loginPhone.value = customer.phone;
+  }
+  if (customer?.displayName && loginName && !loginName.value) {
+    loginName.value = customer.displayName;
+  }
+  clearLoginError();
   refreshOrderHistory();
 }
 
 function normalizeCustomerProfile(user) {
   if (!user) return null;
   return {
-    uid: user.uid || user.userId || user.id || "",
+    uid: user.uid || user.userId || user.id || `phone:${String(user.phone || "").replace(/[^\d]/g, "")}`,
     displayName: user.displayName || user.name || user.display_name || "",
-    email: user.email || "",
-    photoURL: user.photoURL || user.photoUrl || user.photoURLString || user.picture || ""
+    email: "",
+    photoURL: user.photoURL || user.photoUrl || user.photoURLString || user.picture || "",
+    phone: String(user.phone || "").replace(/[^\d]/g, "")
   };
 }
 
-function getAuthErrorMessage(error, fallback = "Google login failed") {
-  const code = String(error?.code || error?.errorCode || "").trim();
-  const message = String(error?.message || error?.localizedMessage || "").trim();
-  if (code && message) return `${code}: ${message}`;
-  if (message) return message;
-  if (code) return code;
-  return fallback;
-}
-
-function setCustomerFromFirebase(user) {
-  const previousUid = state.customer?.uid || "";
+function setCustomerSession(user) {
+  const previousPhone = state.customer?.phone || "";
   state.customer = normalizeCustomerProfile(user);
   try {
     if (state.customer) localStorage.setItem("customerProfile", JSON.stringify(state.customer));
     else localStorage.removeItem("customerProfile");
   } catch {}
   updateAccountUi();
-  if (state.customer?.uid && state.customer.uid !== previousUid) {
+  if (state.customer?.phone && state.customer.phone !== previousPhone) {
+    setSavedCustomerPhone(state.customer.phone);
     requestPushPermission("login").catch(error => console.warn("Push permission request after login failed", error));
   }
 }
 
-function finalizeAuthBootstrap(user = null, errorMessage = "") {
+function finalizeCustomerBootstrap(user = null, errorMessage = "") {
   authBootstrapResolved = true;
   if (user) {
-    setCustomerFromFirebase(user);
+    setCustomerSession(user);
     if (state.currentView === "account") {
       switchView("home");
     }
     return;
   }
 
-  setCustomerFromFirebase(null);
+  setCustomerSession(null);
   switchView("account");
   if (errorMessage) {
     showLoginError(errorMessage);
   } else {
     accountStatus.textContent = "Connectez-vous pour suivre vos commandes";
-    accountHelp.textContent = "Continuer avec Google pour suivre vos commandes et votre historique.";
+    accountHelp.textContent = "Entrez votre numero pour retrouver vos commandes et votre progression.";
   }
+}
+
+async function initCustomerSession() {
+  try {
+    const savedProfile = JSON.parse(localStorage.getItem("customerProfile") || "null");
+    if (savedProfile && !state.customer) state.customer = normalizeCustomerProfile(savedProfile);
+  } catch {}
+  updateAccountUi();
+  finalizeCustomerBootstrap(state.customer || null);
+  return state.customer;
+}
+
+async function startPhoneLogin() {
+  const phone = String(loginPhone?.value || "").replace(/[^\d]/g, "").trim();
+  const name = String(loginName?.value || "").trim();
+  if (!phone) {
+    showLoginError("Veuillez entrer votre numero de telephone.");
+    return;
+  }
+
+  phoneLoginButton?.setAttribute("disabled", "true");
+  if (phoneLoginButton) phoneLoginButton.textContent = "Connexion...";
+  clearLoginError();
+
+  try {
+    const response = await fetch("/api/customer-auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone, name })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || "Connexion impossible");
+    }
+    const session = normalizeCustomerProfile(payload.session || { phone, displayName: name });
+    saveStoredPhoneCustomer(session);
+    setCustomerSession(session);
+    switchView("home");
+    showToast("Connexion reussie");
+  } catch (error) {
+    console.error("Phone login failed:", error);
+    try {
+      const fallbackSession = loginWithLocalPhoneFallback(phone, name);
+      setCustomerSession(fallbackSession);
+      switchView("home");
+      showToast("Connexion locale active");
+    } catch (fallbackError) {
+      showLoginError(fallbackError?.message || error?.message || "Impossible de vous connecter pour le moment.");
+    }
+  } finally {
+    phoneLoginButton?.removeAttribute("disabled");
+    if (phoneLoginButton) phoneLoginButton.textContent = "Continuer";
+  }
+}
+
+function logoutPhoneCustomer() {
+  setCustomerSession(null);
+  if (loginName) loginName.value = "";
+  switchView("account");
+  showToast("Deconnecte");
 }
 
 function getCustomerId() {
@@ -1007,6 +1075,10 @@ function getCustomerId() {
   return id;
 }
 
+function getActiveCustomerPhone() {
+  return String(state.customer?.phone || getSavedCustomerPhone() || "").replace(/[^\d]/g, "").trim();
+}
+
 function getSavedCustomerPhone() {
   return localStorage.getItem("lastCheckoutPhone") || "";
 }
@@ -1014,6 +1086,44 @@ function getSavedCustomerPhone() {
 function setSavedCustomerPhone(phone) {
   const clean = String(phone || "").trim();
   if (clean) localStorage.setItem("lastCheckoutPhone", clean);
+}
+
+function getStoredPhoneCustomers() {
+  try {
+    return JSON.parse(localStorage.getItem("phoneCustomers") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveStoredPhoneCustomer(session) {
+  const phone = String(session?.phone || "").replace(/[^\d]/g, "").trim();
+  if (!phone) return;
+  const customers = getStoredPhoneCustomers();
+  customers[phone] = normalizeCustomerProfile(session);
+  try {
+    localStorage.setItem("phoneCustomers", JSON.stringify(customers));
+  } catch {}
+}
+
+function loginWithLocalPhoneFallback(phone, name = "") {
+  const normalizedPhone = String(phone || "").replace(/[^\d]/g, "").trim();
+  const normalizedName = String(name || "").trim();
+  const customers = getStoredPhoneCustomers();
+  const existing = customers[normalizedPhone];
+  if (existing) {
+    return normalizeCustomerProfile(existing);
+  }
+  if (!normalizedName) {
+    throw new Error("Ajoutez votre nom pour creer votre compte client.");
+  }
+  const created = normalizeCustomerProfile({
+    uid: `phone:${normalizedPhone}`,
+    displayName: normalizedName,
+    phone: normalizedPhone
+  });
+  saveStoredPhoneCustomer(created);
+  return created;
 }
 
 function localizeOrderStatus(status) {
@@ -1030,7 +1140,24 @@ function localizeOrderStatus(status) {
 }
 
 function getOrderHistoryKey() {
-  return `orderHistory:${state.customer?.uid || getCustomerId()}`;
+  return `orderHistory:${getActiveCustomerPhone() || state.customer?.uid || getCustomerId()}`;
+}
+
+function modeLabel(mode) {
+  return mode === "delivery" ? "Livraison" : "Retrait";
+}
+
+function renderLoadingState(message = "Chargement...") {
+  return `
+    <div class="loading-state">
+      <span class="loading-spinner" aria-hidden="true"></span>
+      <strong>${message}</strong>
+    </div>
+  `;
+}
+
+function renderErrorState(message = "Le service est indisponible pour le moment.") {
+  return `<div class="empty-state error-state">${message}</div>`;
 }
 
 function getOrderHistory() {
@@ -1099,13 +1226,14 @@ function refillCartFromOrder(order) {
 }
 
 async function refreshOrderHistory() {
+  isOrdersLoading = true;
+  renderOrderHistory();
   const params = new URLSearchParams();
-  if (state.customer?.uid) params.set("firebaseUid", state.customer.uid);
-  if (state.customer?.email) params.set("email", state.customer.email);
-  const savedPhone = getSavedCustomerPhone();
+  const savedPhone = getActiveCustomerPhone();
   if (savedPhone) params.set("phone", savedPhone);
   if (![...params.keys()].length) {
     remoteOrderHistory = null;
+    isOrdersLoading = false;
     renderOrderHistory();
     return;
   }
@@ -1140,6 +1268,8 @@ async function refreshOrderHistory() {
     }));
   } catch {
     remoteOrderHistory = null;
+  } finally {
+    isOrdersLoading = false;
   }
   renderOrderHistory();
 }
@@ -1166,6 +1296,10 @@ function renderOrderHistoryLegacy() {
 
 function renderOrderHistory() {
   if (!ordersList) return;
+  if (isOrdersLoading) {
+    ordersList.innerHTML = renderLoadingState("Chargement de vos commandes...");
+    return;
+  }
   const orders = getDisplayedOrderHistory();
   ordersList.innerHTML = orders.length ? orders.map(order => {
     const timeline = makeTimeline(order, order.trackingProgress);
@@ -1224,7 +1358,7 @@ function renderOrderDetails(order) {
       </div>
       <div class="order-detail-stat">
         <span>Mode</span>
-        <strong>${order.mode === "delivery" ? "Livraison" : "Pickup"}</strong>
+        <strong>${modeLabel(order.mode)}</strong>
       </div>
       <div class="order-detail-stat">
         <span>Total</span>
@@ -1248,7 +1382,7 @@ function renderOrderDetails(order) {
     </div>
     <div class="order-details-section">
       <h3>Adresse</h3>
-      <p>${order.address || (order.mode === "pickup" ? "Pickup from shop" : "Adresse non disponible")}</p>
+      <p>${order.address || (order.mode === "pickup" ? "Retrait en magasin" : "Adresse non disponible")}</p>
       <small>Frais de livraison: ${money(order.deliveryFee || 0)}${order.discount ? ` · Reduction: ${money(order.discount)}` : ""}</small>
     </div>
     <div class="order-details-section">
@@ -1326,8 +1460,8 @@ let pushMessaging = null;
 async function syncDeviceToken(token) {
   if (!token) return;
   const payload = {
-    firebaseUid: state.customer?.uid || "",
-    phone: getSavedCustomerPhone(),
+    firebaseUid: "",
+    phone: getActiveCustomerPhone(),
     platform: "web",
     token
   };
@@ -1414,7 +1548,7 @@ async function fetchNotifications() {
       const normalized = normalizeNotificationPayload(notification);
       normalized.read = readIds.has(String(normalized.id));
       return normalized;
-    });
+    }).filter(notification => !notification.read);
   } catch {
     latestNotifications = latestNotifications || [];
   }
@@ -1425,10 +1559,12 @@ function markNotificationsRead(ids = latestNotifications.map(notification => not
   const readIds = new Set(getReadNotificationIds().map(String));
   ids.forEach(id => readIds.add(String(id)));
   setReadNotificationIds([...readIds]);
-  latestNotifications = latestNotifications.map(notification => ({
-    ...notification,
-    read: readIds.has(String(notification.id))
-  }));
+  latestNotifications = latestNotifications
+    .map(notification => ({
+      ...notification,
+      read: readIds.has(String(notification.id))
+    }))
+    .filter(notification => !notification.read);
 }
 
 function renderNotifications() {
@@ -1525,10 +1661,10 @@ function handleNotificationAction(notificationId) {
 document.getElementById("notificationButton")?.addEventListener("click", async () => {
   requestPushPermission(); // Ask permission when clicking the bell
   await fetchNotifications();
+  markNotificationsRead();
   renderNotifications();
   notificationModal?.classList.add("open");
   notificationModal?.setAttribute("aria-hidden", "false");
-  markNotificationsRead();
   updateNotificationBadge();
 });
 
@@ -1583,100 +1719,15 @@ async function requestPushPermission(reason = "manual") {
 }
 
 async function initFirebaseAuth() {
-  try {
-    const savedProfile = JSON.parse(localStorage.getItem("customerProfile") || "null");
-    if (savedProfile && !state.customer) state.customer = savedProfile;
-  } catch {}
-  updateAccountUi();
-  console.info("Using web Google login");
-  if (!auth || !hasFirebaseConfig()) {
-    finalizeAuthBootstrap(null, "Configuration Firebase manquante pour la connexion Google.");
-    return null;
-  }
-  try {
-    const { GoogleAuthProvider, signInWithRedirect, signOut, onAuthStateChanged, getRedirectResult } = await import(`https://www.gstatic.com/firebasejs/${firebaseSdkVersion}/firebase-auth.js`);
-    const { signInWithPopup } = await import(`https://www.gstatic.com/firebasejs/${firebaseSdkVersion}/firebase-auth.js`);
-    firebaseAuth = auth;
-    firebaseAuth.languageCode = currentLanguage;
-    firebaseProvider = new GoogleAuthProvider();
-    firebaseProvider.addScope("profile");
-    firebaseProvider.addScope("email");
-    firebaseSignInWithRedirect = signInWithRedirect;
-    firebaseSignInWithPopup = signInWithPopup;
-    firebaseSignOut = signOut;
-    let redirectErrorMessage = "";
-    try {
-      await getRedirectResult(firebaseAuth);
-    } catch (error) {
-      redirectErrorMessage = getAuthErrorMessage(error);
-      console.warn("Firebase redirect login failed", redirectErrorMessage);
-      showToast(redirectErrorMessage);
-    }
-
-    await new Promise(resolve => {
-      let settled = false;
-      let timeoutId = null;
-      const finish = (user, errorMessage = redirectErrorMessage) => {
-        if (settled) return;
-        settled = true;
-        if (timeoutId) clearTimeout(timeoutId);
-        unsubscribe?.();
-        finalizeAuthBootstrap(user, errorMessage);
-        resolve(user || null);
-      };
-      const unsubscribe = onAuthStateChanged(
-        firebaseAuth,
-        user => finish(user, redirectErrorMessage),
-        error => {
-          const message = getAuthErrorMessage(error, "Verification de session impossible.");
-          console.error("Firebase auth state check failed", message, error);
-          finish(null, message);
-        }
-      );
-      timeoutId = setTimeout(() => {
-        if (!settled) {
-          console.warn("Firebase auth state check timed out");
-          finish(firebaseAuth.currentUser || null, redirectErrorMessage);
-        }
-      }, 3500);
-    });
-
-    if (Notification.permission === "granted") {
-      initializeMessaging().catch(error => console.warn("Web push init failed", error));
-    }
-  } catch (error) {
-    const message = getAuthErrorMessage(error, "Initialisation Google impossible.");
-    console.error("Firebase web auth bootstrap failed", message, error);
-    finalizeAuthBootstrap(null, message);
-  }
+  return initCustomerSession();
 }
 
 async function startGoogleLogin() {
-  if (!firebaseAuth || !firebaseProvider || !firebaseSignInWithRedirect) {
-    const message = "Google login is not configured yet";
-    showLoginError(message);
-    showToast(message);
-    return;
-  }
-  firebaseAuth.languageCode = currentLanguage;
-  try {
-    console.info("Using web Google login");
-    if (firebaseSignInWithPopup && !/iPhone|iPad|iPod/i.test(navigator.userAgent || "")) {
-      await firebaseSignInWithPopup(firebaseAuth, firebaseProvider);
-      showToast("Google account connected");
-      return;
-    }
-  } catch (error) {
-    console.warn("Popup sign-in failed, falling back to redirect", getAuthErrorMessage(error));
-  }
-  await firebaseSignInWithRedirect(firebaseAuth, firebaseProvider);
+  return startPhoneLogin();
 }
 
 async function logoutGoogleCustomer() {
-  if (!firebaseAuth || !firebaseSignOut) return;
-  await firebaseSignOut(firebaseAuth);
-  switchView("account");
-  showToast("Signed out");
+  logoutPhoneCustomer();
 }
 
 function categoryIcon(label) {
@@ -1919,6 +1970,9 @@ async function loadSettings() {
 }
 
 async function loadMenu() {
+  isMenuLoading = true;
+  menuLoadError = "";
+  renderProducts();
   try {
     const [menuResponse] = await Promise.all([
       fetch("/api/menu", { cache: "no-store" }),
@@ -1931,10 +1985,17 @@ async function loadMenu() {
     categories = [{ name: "All", imageUrl: "" }, ...stableMenu.categories];
     products = stableMenu.products;
     renderCategories();
-    renderProducts();
     renderCart();
+    menuLoadError = "";
   } catch (error) {
-    showToast(t("usingSavedMenu"));
+    categories = [{ name: "All", imageUrl: "" }, ...cloneMenuItems(fallbackCategories).filter(category => category.name !== "All")];
+    products = cloneMenuItems(fallbackProducts);
+    renderCategories();
+    menuLoadError = "";
+    showToast("Connexion au backend indisponible. Le menu enregistre reste visible.");
+  } finally {
+    isMenuLoading = false;
+    renderProducts();
   }
 }
 
@@ -1983,6 +2044,22 @@ function renderProductCards(target, items, emptyMessage) {
 }
 
 function renderProducts() {
+  if (isMenuLoading) {
+    const loadingMarkup = renderLoadingState("Chargement du menu...");
+    productRoot.innerHTML = loadingMarkup;
+    featuredProductsRoot.innerHTML = loadingMarkup;
+    return;
+  }
+  if (menuLoadError) {
+    const errorMarkup = renderErrorState(menuLoadError);
+    productRoot.innerHTML = errorMarkup;
+    featuredProductsRoot.innerHTML = errorMarkup;
+    resultsMeta.textContent = "Service indisponible";
+    sectionHeading.textContent = "Menu";
+    if (homeResultsMeta) homeResultsMeta.textContent = "Connexion requise";
+    if (homeSectionHeading) homeSectionHeading.textContent = "Menu indisponible";
+    return;
+  }
   const filtered = getFilteredProducts();
   const featured = [...products]
     .filter(product => product.available !== false)
@@ -2136,7 +2213,7 @@ function renderCart() {
         <button data-plus="${item.key}" aria-label="Add one ${item.name}">+</button>
       </div>
     </div>
-  `).join("") : `<div class="empty-state">${t("emptyBasket")}</div>`;
+  `).join("") : `<div class="empty-state">Votre panier est vide pour le moment. Ajoutez quelques produits pour continuer.</div>`;
 
   if (lastChangedCartKey) {
     const changedRow = [...cartItems.querySelectorAll("[data-cart-key]")].find(node => node.dataset.cartKey === lastChangedCartKey);
@@ -2421,8 +2498,8 @@ function buildOrderPayload(formData, cartSummary, whatsappMessage) {
   return {
     customerName: String(formData.get("customerName") || "").trim(),
     customerPhone: String(formData.get("customerPhone") || "").trim(),
-    customerEmail: state.customer?.email || "",
-    firebaseUid: state.customer?.uid || "",
+    customerEmail: "",
+    firebaseUid: "",
     mode: state.mode,
     address: state.mode === "delivery" ? String(formData.get("customerAddress") || "").trim() : "Pickup from shop",
     latitude: state.location?.latitude ?? null,
@@ -2633,8 +2710,11 @@ installDismissButton?.addEventListener("click", () => {
   setInstallBannerDismissed(true);
   updateInstallUi();
 });
-googleLogin?.addEventListener("click", startGoogleLogin);
-googleLogout?.addEventListener("click", logoutGoogleCustomer);
+phoneLoginForm?.addEventListener("submit", event => {
+  event.preventDefault();
+  startPhoneLogin();
+});
+customerLogout?.addEventListener("click", logoutPhoneCustomer);
 closeOptions?.addEventListener("click", closeOptionsModal);
 optionsModal?.addEventListener("click", event => {
   if (event.target === optionsModal) closeOptionsModal();
