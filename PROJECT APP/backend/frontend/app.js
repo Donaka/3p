@@ -429,6 +429,8 @@ let recaptchaVerifierRef = null;
 let recaptchaVisibleFallback = false;
 let locationGateActive = false;
 let pendingCustomerName = "";
+let authStateUnsubscribe = null;
+let authBootstrapPromise = null;
 
 const money = value => `${Number.isInteger(value) ? value : value.toFixed(2)} DHS`;
 
@@ -1231,8 +1233,18 @@ async function verifyPhoneOtp() {
   setLoginButtonsBusy(true, "Verifying...");
   clearLoginError();
   try {
-    await confirmationResultRef.confirm(code);
+    const result = await confirmationResultRef.confirm(code);
     confirmationResultRef = null;
+    const user = mapFirebasePhoneUser(result?.user);
+    console.log("OTP success:", user);
+    if (user) {
+      setCustomerSession(user);
+      const locationReady = await resolveLocationGate();
+      if (locationReady) {
+        switchView("home");
+        hideSplashScreen();
+      }
+    }
     showToast("Numero verifie");
   } catch (error) {
     console.error("OTP verification failed:", error);
@@ -1877,28 +1889,44 @@ async function requestPushPermission(reason = "manual") {
 }
 
 async function initFirebaseAuth() {
-  return new Promise(resolve => {
-    let settled = false;
-    const finish = async (user = null, errorMessage = "") => {
-      if (settled) return;
-      settled = true;
-      if (user) {
-        setCustomerSession(user);
-        await resolveLocationGate();
-      } else {
-        finalizeCustomerBootstrap(null, errorMessage);
-      }
-      resolve(user);
-    };
+  if (authBootstrapPromise) return authBootstrapPromise;
+  authBootstrapPromise = new Promise(resolve => {
+    let initialResolved = false;
 
-    onAuthStateChanged(auth, async firebaseUser => {
+    authStateUnsubscribe?.();
+    authStateUnsubscribe = onAuthStateChanged(auth, async firebaseUser => {
       console.log("Using web Firebase auth state", firebaseUser ? firebaseUser.uid : "signed-out");
-      await finish(firebaseUser ? mapFirebasePhoneUser(firebaseUser) : null);
-    }, async error => {
+      try {
+        if (firebaseUser) {
+          const customer = mapFirebasePhoneUser(firebaseUser);
+          setCustomerSession(customer);
+          const locationReady = await resolveLocationGate();
+          if (locationReady) {
+            switchView("home");
+          }
+        } else {
+          hideLocationGate();
+          finalizeCustomerBootstrap(null);
+        }
+      } catch (error) {
+        console.error("Firebase auth bootstrap handler failed:", error);
+        finalizeCustomerBootstrap(null, getAuthErrorMessage(error, "La connexion telephone Firebase a echoue."));
+      } finally {
+        if (!initialResolved) {
+          initialResolved = true;
+          resolve(state.customer);
+        }
+      }
+    }, error => {
       console.error("Firebase auth state failed:", error);
-      await finish(null, getAuthErrorMessage(error, "La connexion telephone Firebase a echoue."));
+      finalizeCustomerBootstrap(null, getAuthErrorMessage(error, "La connexion telephone Firebase a echoue."));
+      if (!initialResolved) {
+        initialResolved = true;
+        resolve(null);
+      }
     });
   });
+  return authBootstrapPromise;
 }
 
 async function startGoogleLogin() {
