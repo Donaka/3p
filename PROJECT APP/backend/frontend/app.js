@@ -1021,6 +1021,7 @@ function localizeOrderStatus(status) {
     new: "Nouvelle",
     accepted: "Acceptee",
     preparing: "En preparation",
+    ready: "Prête",
     out_for_delivery: "En livraison",
     delivered: "Livree",
     cancelled: "Annulee"
@@ -1052,15 +1053,26 @@ function getDisplayedOrderHistory() {
   return Array.isArray(remoteOrderHistory) ? remoteOrderHistory : getOrderHistory();
 }
 
-function makeTimeline(statusValue, explicitProgress = null) {
-  const steps = [
+function getStatusSteps(order) {
+  if (order?.mode === "pickup") {
+    return [
+      { key: "preparing", label: "En préparation" },
+      { key: "ready", label: "Prête" },
+      { key: "delivered", label: "Livrée" }
+    ];
+  }
+  return [
     { key: "new", label: "Nouvelle" },
     { key: "accepted", label: "Acceptee" },
     { key: "preparing", label: "En preparation" },
     { key: "out_for_delivery", label: "En livraison" },
     { key: "delivered", label: "Livree" }
   ];
-  const normalized = String(statusValue || "").toLowerCase();
+}
+
+function makeTimeline(order, explicitProgress = null) {
+  const steps = getStatusSteps(order);
+  const normalized = String(order?.statusKey || order?.rawStatus || order?.status || "").toLowerCase();
   const currentIndex = normalized.includes("cancel") ? -1 : Math.max(0, steps.findIndex(step => step.key === normalized));
   const progressPercent = explicitProgress === null || explicitProgress === undefined
     ? (currentIndex < 0 ? 0 : Math.min(100, (currentIndex / (steps.length - 1)) * 100))
@@ -1110,6 +1122,7 @@ async function refreshOrderHistory() {
       totalValue: Number(order.total || 0),
       itemCount: Array.isArray(order.items) ? order.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0) : 0,
       mode: order.mode,
+      statusKey: order.status,
       status: localizeOrderStatus(order.status),
       rawStatus: order.status,
       customerName: order.customerName || "",
@@ -1155,7 +1168,7 @@ function renderOrderHistory() {
   if (!ordersList) return;
   const orders = getDisplayedOrderHistory();
   ordersList.innerHTML = orders.length ? orders.map(order => {
-    const timeline = makeTimeline(order.rawStatus || order.status, order.trackingProgress);
+    const timeline = makeTimeline(order, order.trackingProgress);
     return `
       <article class="order-history-card" data-order-card="${order.id}" tabindex="0" role="button" aria-label="Voir les details de la commande ${order.id}">
         <div class="order-history-top">
@@ -1201,7 +1214,7 @@ function closeOrderDetailsModal() {
 
 function renderOrderDetails(order) {
   if (!orderDetailsBody || !orderDetailsTitle) return;
-  const timeline = makeTimeline(order.rawStatus || order.status, order.trackingProgress);
+  const timeline = makeTimeline(order, order.trackingProgress);
   orderDetailsTitle.textContent = `Commande #${order.id}`;
   orderDetailsBody.innerHTML = `
     <div class="order-details-grid">
@@ -1280,6 +1293,7 @@ async function openOrderDetails(orderId) {
       total: money(Number(order.total || 0)),
       totalValue: Number(order.total || 0),
       mode: order.mode,
+      statusKey: order.status,
       status: localizeOrderStatus(order.status),
       rawStatus: order.status,
       customerName: order.customerName || "",
@@ -2707,6 +2721,7 @@ checkoutForm.addEventListener("submit", async event => {
       total: money(cartSummary.total),
       itemCount: cartSummary.items.reduce((sum, item) => sum + item.quantity, 0),
       mode: state.mode,
+      statusKey: saved?.order?.status || (state.mode === "pickup" ? "preparing" : "new"),
       status: localizeOrderStatus(saved?.order?.status || "new"),
       customerName: formData.get("customerName")
     };

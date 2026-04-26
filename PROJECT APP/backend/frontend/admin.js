@@ -593,7 +593,15 @@ function renderOrderDetail(order) {
   orderDetailEmpty.classList.add("hidden");
   orderDetailTitle.textContent = `Order #${order.id}`;
   orderStatusSelect.disabled = false;
-  orderStatusSelect.value = order.status;
+  const allowedStatuses = order.mode === "pickup"
+    ? new Set(["preparing", "ready", "delivered", "cancelled"])
+    : new Set(["new", "accepted", "preparing", "delivered", "cancelled"]);
+  [...orderStatusSelect.options].forEach(option => {
+    option.hidden = !allowedStatuses.has(option.value);
+  });
+  orderStatusSelect.value = order.mode === "delivery" && order.status === "out_for_delivery"
+    ? (order.rawStatus || "preparing")
+    : order.status;
   detailCustomerName.textContent = order.customerName || "Customer";
   detailCustomerPhone.textContent = order.customerPhone || "-";
   detailCustomerEmail.textContent = order.customerEmail || order.customer?.email || "-";

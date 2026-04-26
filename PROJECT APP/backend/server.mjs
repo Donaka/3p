@@ -143,6 +143,7 @@ async function ensureDatabase() {
             distance_km NUMERIC(10, 2) NOT NULL DEFAULT 0,
             delivery_zone_radius NUMERIC(10, 2),
             accepted_at TIMESTAMPTZ,
+            ready_at TIMESTAMPTZ,
             estimated_delivery_minutes INTEGER,
             delivery_fee NUMERIC(10, 2) NOT NULL DEFAULT 0,
             subtotal NUMERIC(12, 2) NOT NULL DEFAULT 0,
@@ -150,7 +151,7 @@ async function ensureDatabase() {
             total NUMERIC(12, 2) NOT NULL DEFAULT 0,
             promo_code TEXT,
             whatsapp_message TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'accepted', 'preparing', 'delivered', 'cancelled')),
+            status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'accepted', 'preparing', 'ready', 'delivered', 'cancelled')),
             customer_id BIGINT REFERENCES customers(id) ON DELETE SET NULL
           );
         `);
@@ -164,7 +165,14 @@ async function ensureDatabase() {
           CREATE INDEX IF NOT EXISTS orders_phone_idx ON orders(customer_phone);
         `);
         await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ;`);
+        await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS ready_at TIMESTAMPTZ;`);
         await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS estimated_delivery_minutes INTEGER;`);
+        await client.query(`ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;`);
+        await client.query(`
+          ALTER TABLE orders
+          ADD CONSTRAINT orders_status_check
+          CHECK (status IN ('new', 'accepted', 'preparing', 'ready', 'delivered', 'cancelled'))
+        `);
         await client.query(`
           CREATE TABLE IF NOT EXISTS settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -409,6 +417,7 @@ function mapOrderRow(row) {
     distanceKm: Number(row.distance_km || 0),
     deliveryZoneRadius: row.delivery_zone_radius === null ? null : Number(row.delivery_zone_radius),
     acceptedAt: row.accepted_at || null,
+    readyAt: row.ready_at || null,
     estimatedDeliveryMinutes: row.estimated_delivery_minutes === null || row.estimated_delivery_minutes === undefined ? null : Number(row.estimated_delivery_minutes),
     deliveryFee: Number(row.delivery_fee || 0),
     subtotal: Number(row.subtotal || 0),
@@ -470,6 +479,7 @@ function mapNotificationRow(row) {
 function getEstimatedTime(order, activeOrders = 0, preparationTimeBase = fallbackSettings.preparationTimeBase) {
   if (order.status === "delivered") return "Livree";
   if (order.status === "cancelled") return "Annulee";
+  if (order.mode === "pickup") return "Prête dans 5 min";
   const distanceMinutes = Math.max(0, Math.round((Number(order.distanceKm || order.distance_km || 0)) * 3));
   const queueMinutes = Math.max(0, activeOrders) * 4;
   const estimateMin = Math.max(15, Number(preparationTimeBase || fallbackSettings.preparationTimeBase) + distanceMinutes + queueMinutes);
@@ -493,6 +503,44 @@ function computeLiveTracking(row, fallbackEstimate = null) {
       countdownMinutesRemaining: 0,
       trackingProgress: 100,
       estimatedTime: "Commande livree ✅"
+    };
+  }
+
+  if (row.mode === "pickup") {
+    if (rawStatus === "ready") {
+      return {
+        displayStatus: "ready",
+        countdownMinutesRemaining: 0,
+        trackingProgress: 66,
+        estimatedTime: "Commande prête"
+      };
+    }
+
+    const readyAt = row.ready_at ? new Date(row.ready_at) : null;
+    if (!readyAt || Number.isNaN(readyAt.getTime())) {
+      return {
+        displayStatus: "preparing",
+        countdownMinutesRemaining: null,
+        trackingProgress: 12,
+        estimatedTime: "Prête dans 5 min"
+      };
+    }
+
+    const remaining = Math.max(0, Math.ceil((readyAt.getTime() - Date.now()) / 60000));
+    if (remaining <= 0) {
+      return {
+        displayStatus: "ready",
+        countdownMinutesRemaining: 0,
+        trackingProgress: 66,
+        estimatedTime: "Commande prête"
+      };
+    }
+
+    return {
+      displayStatus: "preparing",
+      countdownMinutesRemaining: remaining,
+      trackingProgress: Math.min(60, Math.max(6, Math.round(((5 - remaining) / 5) * 66))),
+      estimatedTime: `Prête dans ${remaining} min`
     };
   }
 
@@ -805,14 +853,18 @@ async function createOrderRecord(order) {
       const estimateMin = Math.max(15, Number(settings.preparationTimeBase || fallbackSettings.preparationTimeBase) + distanceMinutes + queueMinutes);
       const estimateMax = estimateMin + 10;
       const estimatedTime = `${estimateMin}-${estimateMax} min`;
+      const pickupReadyAt = order.mode === "pickup"
+        ? new Date(Date.now() + 5 * 60 * 1000).toISOString()
+        : null;
+      const initialStatus = order.mode === "pickup" ? "preparing" : "new";
 
       const orderResult = await client.query(`
         INSERT INTO orders (
           customer_name, customer_phone, customer_email, firebase_uid,
-          mode, address, latitude, longitude, distance_km, delivery_zone_radius, accepted_at, estimated_delivery_minutes,
+          mode, address, latitude, longitude, distance_km, delivery_zone_radius, accepted_at, ready_at, estimated_delivery_minutes,
           delivery_fee, subtotal, discount, total, promo_code, whatsapp_message, status, customer_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, NULL, $11, $12, $13, $14, $15, $16, 'new', $17)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, NULL, $12, $13, $14, $15, $16, $17, $18, $19)
         RETURNING *
       `, [
         order.customerName || "",
@@ -825,12 +877,14 @@ async function createOrderRecord(order) {
         order.longitude,
         order.distanceKm,
         order.deliveryZoneRadius,
+        pickupReadyAt,
         order.deliveryFee,
         order.subtotal,
         order.discount,
         order.total,
         order.promoCode,
         order.whatsappMessage,
+        initialStatus,
         customer.id
       ]);
       let savedOrder = orderResult.rows[0];
@@ -880,7 +934,8 @@ async function listOrders(filters = {}) {
     const values = [];
     const conditions = [];
 
-    if (filters.status) {
+    const filterByComputedStatus = filters.status === "ready";
+    if (filters.status && !filterByComputedStatus) {
       values.push(filters.status);
       conditions.push(`o.status = $${values.length}`);
     }
@@ -913,7 +968,8 @@ async function listOrders(filters = {}) {
     ]);
 
     const activeOrders = Number(activeOrdersResult.rows[0]?.active_count || 0);
-    return result.rows.map(row => applyOrderTracking(row, activeOrders, settings.preparationTimeBase));
+    const trackedOrders = result.rows.map(row => applyOrderTracking(row, activeOrders, settings.preparationTimeBase));
+    return filterByComputedStatus ? trackedOrders.filter(order => order.status === filters.status) : trackedOrders;
   });
 }
 
@@ -968,7 +1024,7 @@ async function getOrderById(orderId) {
 async function updateOrderStatus(orderId, status) {
   return withDatabase(async () => {
     const settings = await loadSettingsRowDirect();
-    const allowedStatuses = new Set(["new", "accepted", "preparing", "delivered", "cancelled"]);
+    const allowedStatuses = new Set(["new", "accepted", "preparing", "ready", "delivered", "cancelled"]);
     if (!allowedStatuses.has(status)) {
       throw new Error("Invalid order status");
     }
@@ -978,12 +1034,18 @@ async function updateOrderStatus(orderId, status) {
       SET
         status = $2,
         accepted_at = CASE
-          WHEN $2 = 'accepted' THEN NOW()
+          WHEN $2 = 'accepted' AND mode = 'delivery' THEN NOW()
           WHEN $2 = 'new' THEN NULL
           ELSE accepted_at
         END,
+        ready_at = CASE
+          WHEN $2 = 'preparing' AND mode = 'pickup' THEN NOW() + INTERVAL '5 minutes'
+          WHEN $2 = 'ready' THEN NOW()
+          WHEN $2 IN ('new', 'delivered', 'cancelled') THEN NULL
+          ELSE ready_at
+        END,
         estimated_delivery_minutes = CASE
-          WHEN $2 = 'accepted' THEN $3
+          WHEN $2 = 'accepted' AND mode = 'delivery' THEN $3
           WHEN $2 = 'new' THEN NULL
           ELSE estimated_delivery_minutes
         END
