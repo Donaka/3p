@@ -1,0 +1,14 @@
+{
+  "name": "3p-menu-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node backend/server.mjs",
+    "start": "node backend/server.mjs"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.1.0",
+    "pg": "^8.16.3"
+  }
+}
