@@ -49,6 +49,10 @@ const tokensPath = firstExistingPath(
   join(root, "data", "tokens.json"),
   join(root, "tokens.json")
 );
+const usersPath = firstExistingPath(
+  join(root, "data", "users.json"),
+  join(root, "users.json")
+);
 function readTokens() {
   if (!existsSync(tokensPath)) writeFileSync(tokensPath, JSON.stringify({}, null, 2));
   return JSON.parse(readFileSync(tokensPath, "utf8"));
@@ -63,6 +67,27 @@ function deleteToken(customerId) {
   const tokens = readTokens();
   delete tokens[customerId];
   writeFileSync(tokensPath, JSON.stringify(tokens, null, 2));
+}
+
+function ensureJsonFile(path, fallbackValue) {
+  const dir = dirname(path);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  if (!existsSync(path)) writeFileSync(path, JSON.stringify(fallbackValue, null, 2));
+}
+
+function readUsers() {
+  ensureJsonFile(usersPath, []);
+  try {
+    const parsed = JSON.parse(readFileSync(usersPath, "utf8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveUsers(users) {
+  ensureJsonFile(usersPath, []);
+  writeFileSync(usersPath, JSON.stringify(users, null, 2));
 }
 
 const { Pool } = pg;
@@ -380,8 +405,13 @@ function normalizeOrderPayload(payload) {
   })).filter(item => item.productName && item.quantity > 0) : [];
 
   const customerPhone = String(payload.customerPhone || "").trim();
+  const firebaseUid = trimOrNull(payload.firebaseUid);
+  const latitude = parseOptionalNumber(payload.latitude);
+  const longitude = parseOptionalNumber(payload.longitude);
   const total = parseMoney(payload.total, NaN);
   if (!customerPhone) throw new Error("Customer phone is required");
+  if (!firebaseUid) throw new Error("Authenticated user is required");
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) throw new Error("Location is required");
   if (!items.length) throw new Error("Cart items are required");
   if (!Number.isFinite(total) || total <= 0) throw new Error("Total is required");
 
@@ -389,11 +419,11 @@ function normalizeOrderPayload(payload) {
     customerName: String(payload.customerName || "").trim(),
     customerPhone,
     customerEmail: trimOrNull(payload.customerEmail),
-    firebaseUid: trimOrNull(payload.firebaseUid),
+    firebaseUid,
     mode: payload.mode === "pickup" ? "pickup" : "delivery",
     address: trimOrNull(payload.address),
-    latitude: parseOptionalNumber(payload.latitude),
-    longitude: parseOptionalNumber(payload.longitude),
+    latitude,
+    longitude,
     distanceKm: parseMoney(payload.distanceKm),
     deliveryZoneRadius: parseOptionalNumber(payload.deliveryZoneRadius),
     deliveryFee: parseMoney(payload.deliveryFee),
@@ -899,6 +929,54 @@ async function authenticateCustomerByPhone({ phone = "", name = "" } = {}) {
       session: mapCustomerSession(customer)
     };
   });
+}
+
+async function upsertAuthenticatedUser({ firebaseUid = "", phone = "", location = null, lastLoginAt = "" } = {}) {
+  const normalizedPhone = normalizePhone(phone);
+  const normalizedUid = trimOrNull(firebaseUid);
+  if (!normalizedUid) throw new Error("firebaseUid is required");
+  if (!normalizedPhone) throw new Error("phone is required");
+  const safeLocation = location && Number.isFinite(Number(location.lat)) && Number.isFinite(Number(location.lng))
+    ? {
+        lat: Number(location.lat),
+        lng: Number(location.lng)
+      }
+    : null;
+  const record = {
+    firebaseUid: normalizedUid,
+    phone: normalizedPhone,
+    location: safeLocation,
+    lastLoginAt: trimOrNull(lastLoginAt) || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  if (dbPool) {
+    try {
+      await ensureDatabase();
+      await dbPool.query(`
+        INSERT INTO customers (phone, firebase_uid, updated_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (phone) DO UPDATE SET
+          firebase_uid = COALESCE(EXCLUDED.firebase_uid, customers.firebase_uid),
+          updated_at = NOW()
+      `, [normalizedPhone, normalizedUid]);
+    } catch (error) {
+      console.warn("Could not sync authenticated user into PostgreSQL customers:", error.message);
+    }
+  }
+
+  const users = readUsers();
+  const existingIndex = users.findIndex(user => user.firebaseUid === normalizedUid || user.phone === normalizedPhone);
+  if (existingIndex >= 0) {
+    users[existingIndex] = {
+      ...users[existingIndex],
+      ...record
+    };
+  } else {
+    users.push(record);
+  }
+  saveUsers(users);
+  return record;
 }
 
 async function createOrderRecord(order) {
@@ -1938,6 +2016,23 @@ const server = createServer(async (request, response) => {
     } catch (error) {
       const status = /DATABASE_URL/i.test(error.message) ? 503 : 400;
       sendJson(response, status, { error: error.message });
+      return;
+    }
+  }
+
+  if (url.pathname === "/api/users/upsert" && request.method === "POST") {
+    try {
+      const body = await readJsonBody(request);
+      const user = await upsertAuthenticatedUser({
+        firebaseUid: body.firebaseUid,
+        phone: body.phone,
+        location: body.location,
+        lastLoginAt: body.lastLoginAt
+      });
+      sendJson(response, 200, { user });
+      return;
+    } catch (error) {
+      sendJson(response, 400, { error: error.message });
       return;
     }
   }

@@ -245,6 +245,59 @@ button:active {
   z-index: 35;
 }
 
+.location-gate {
+  position: absolute;
+  inset: 0;
+  z-index: 38;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 50% 18%, rgba(239, 16, 16, 0.18), transparent 34%),
+    rgba(0, 0, 0, 0.88);
+}
+
+.location-gate.hidden {
+  display: none;
+}
+
+.location-gate-card {
+  width: min(360px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 24px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(circle at top right, rgba(255, 139, 61, 0.08), transparent 36%),
+    linear-gradient(180deg, rgba(24, 24, 27, 0.96), rgba(12, 12, 14, 0.96));
+  box-shadow: 0 28px 48px rgba(0, 0, 0, 0.34);
+  text-align: center;
+}
+
+.location-gate-card p,
+.location-gate-card h1,
+.location-gate-card span {
+  margin: 0;
+}
+
+.location-gate-card p {
+  color: #fca5a5;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.location-gate-card h1 {
+  font-size: 1.55rem;
+  line-height: 1.1;
+}
+
+.location-gate-card span {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
 .language-screen.hidden {
   display: none;
   pointer-events: none;
@@ -2479,6 +2532,21 @@ button:active {
   color: white;
   font-weight: 950;
   box-shadow: 0 14px 30px rgba(214, 0, 0, 0.28);
+}
+
+.auth-submit-secondary {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+}
+
+.phone-login-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.recaptcha-container {
+  min-height: 1px;
 }
 
 .auth-submit:disabled {

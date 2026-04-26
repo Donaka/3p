@@ -1,4 +1,4 @@
-const staticCacheName = "3p-chicken-pops-static-v82";
+const staticCacheName = "3p-chicken-pops-static-v83";
 const imageCacheName = "image-cache-v2";
 const files = [
   "./",

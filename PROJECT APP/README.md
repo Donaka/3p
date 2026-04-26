@@ -42,17 +42,22 @@ Use `https://3p-production.up.railway.app` for customer devices. To synchronize 
 
 The WhatsApp order number is set in `shopWhatsAppNumber` inside `app.js`. It must use the country code with no plus sign, for example `212688943959`.
 
-## Customer Google login
+## Customer phone login
 
-Google login is for customers only. Admin login still uses only `ADMIN_PASSWORD`.
+Customer login now uses Firebase Web SDK phone authentication. Admin login still uses only `ADMIN_PASSWORD`.
 
-In Firebase Console, keep Authentication > Sign-in method > Google enabled, then open Project settings > General > Your apps > Web app and copy the Firebase config into `firebase-config.js`.
+In Firebase Console:
 
-Also add your hosted domain in Firebase Authentication > Settings > Authorized domains:
+1. Enable **Authentication > Sign-in method > Phone**
+2. Add your hosted domain in **Authentication > Settings > Authorized domains**
+   - `3p-production.up.railway.app`
+3. Make sure the web app config in `backend/frontend/firebase-config.js` matches your Firebase project
 
-- `3p-production.up.railway.app`
+Important notes:
 
-The customer app uses Firebase redirect login, which is the recommended flow for mobile browsers and Android WebView. When customers sign in, their name is filled into checkout and their Google email is included in the WhatsApp order.
+- reCAPTCHA must be allowed on the deployed domain or phone login can fail
+- if the domain is missing from Firebase authorized domains, SMS login may not work
+- the PWA/browser app uses Firebase Web SDK only, not Capacitor or Android native auth
 
 ## PWA / browser deployment
 

@@ -1,4 +1,10 @@
-import { messaging, getToken, onMessage } from "./firebase-config.js";
+import { auth, messaging, getToken, onMessage } from "./firebase-config.js";
+import {
+  RecaptchaVerifier,
+  signInWithPhoneNumber,
+  onAuthStateChanged,
+  signOut
+} from "https://www.gstatic.com/firebasejs/10.9.0/firebase-auth.js";
 
 const shopWhatsAppNumber = "212688943959";
 const defaultShopSettings = {
@@ -359,6 +365,14 @@ const loginName = document.querySelector("#loginName");
 const phoneLoginButton = document.querySelector("#phoneLoginButton");
 const accountLoginError = document.querySelector("#accountLoginError");
 const customerLogout = document.querySelector("#customerLogout");
+const otpFieldWrap = document.querySelector("#otpFieldWrap");
+const otpCode = document.querySelector("#otpCode");
+const verifyCodeButton = document.querySelector("#verifyCodeButton");
+const recaptchaContainer = document.querySelector("#recaptchaContainer");
+const recaptchaFallback = document.querySelector("#recaptchaFallback");
+const locationGate = document.querySelector("#locationGate");
+const locationGateMessage = document.querySelector("#locationGateMessage");
+const allowLocationButton = document.querySelector("#allowLocationButton");
 const customerName = document.querySelector("#customerName");
 const customerPhoneInput = document.querySelector("#customerPhone");
 const promoCodeInput = document.querySelector("#promoCode");
@@ -410,6 +424,11 @@ let authBootstrapResolved = false;
 let isMenuLoading = true;
 let menuLoadError = "";
 let isOrdersLoading = false;
+let confirmationResultRef = null;
+let recaptchaVerifierRef = null;
+let recaptchaVisibleFallback = false;
+let locationGateActive = false;
+let pendingCustomerName = "";
 
 const money = value => `${Number.isInteger(value) ? value : value.toFixed(2)} DHS`;
 
@@ -813,6 +832,150 @@ function clearLoginError() {
   accountLoginError.classList.add("hidden");
 }
 
+function showLocationGate(message = "Location permission is required to continue.") {
+  locationGateActive = true;
+  if (locationGateMessage) locationGateMessage.textContent = message;
+  locationGate?.classList.remove("hidden");
+}
+
+function hideLocationGate() {
+  locationGateActive = false;
+  locationGate?.classList.add("hidden");
+}
+
+function normalizeMoroccoPhone(input) {
+  const raw = String(input || "").trim().replace(/\s+/g, "");
+  if (!raw) return "";
+  if (raw.startsWith("+")) {
+    const clean = `+${raw.slice(1).replace(/[^\d]/g, "")}`;
+    return /^\+\d{9,15}$/.test(clean) ? clean : "";
+  }
+  const digits = raw.replace(/[^\d]/g, "");
+  if (/^0[67]\d{8}$/.test(digits)) return `+212${digits.slice(1)}`;
+  if (/^212[67]\d{8}$/.test(digits)) return `+${digits}`;
+  if (/^[67]\d{8}$/.test(digits)) return `+212${digits}`;
+  return "";
+}
+
+function mapFirebasePhoneUser(user) {
+  if (!user) return null;
+  return {
+    uid: user.uid,
+    displayName: user.displayName || "",
+    email: user.email || "",
+    photoURL: user.photoURL || "",
+    phone: normalizeMoroccoPhone(user.phoneNumber || user.phone || "") || String(user.phoneNumber || user.phone || "").trim()
+  };
+}
+
+function getAuthErrorMessage(error, fallback = "Impossible de vous connecter pour le moment.") {
+  const code = String(error?.code || "");
+  if (code.includes("invalid-phone-number")) return "Numero de telephone invalide.";
+  if (code.includes("missing-phone-number")) return "Veuillez entrer votre numero de telephone.";
+  if (code.includes("captcha-check-failed")) return "La verification reCAPTCHA a echoue. Reessayez.";
+  if (code.includes("too-many-requests")) return "Trop de tentatives. Reessayez plus tard.";
+  if (code.includes("invalid-verification-code")) return "Code OTP incorrect.";
+  if (code.includes("code-expired")) return "Le code OTP a expire. Demandez un nouveau code.";
+  if (code.includes("network-request-failed")) return "Connexion reseau indisponible. Verifiez Internet puis reessayez.";
+  return error?.message || fallback;
+}
+
+function setLoginButtonsBusy(busy, label = "Send code") {
+  if (busy) {
+    phoneLoginButton?.setAttribute("disabled", "true");
+    verifyCodeButton?.setAttribute("disabled", "true");
+  } else {
+    phoneLoginButton?.removeAttribute("disabled");
+    verifyCodeButton?.removeAttribute("disabled");
+  }
+  if (phoneLoginButton) phoneLoginButton.textContent = label;
+}
+
+function ensureRecaptchaMode(visible = false) {
+  if (!recaptchaContainer) return null;
+  if (recaptchaVerifierRef && recaptchaVisibleFallback === visible) return recaptchaVerifierRef;
+  try {
+    recaptchaVerifierRef?.clear?.();
+  } catch {}
+  recaptchaContainer.innerHTML = "";
+  recaptchaContainer.classList.toggle("hidden", !visible);
+  recaptchaFallback?.classList.toggle("hidden", !visible);
+  recaptchaVisibleFallback = visible;
+  recaptchaVerifierRef = new RecaptchaVerifier(auth, recaptchaContainer, {
+    size: visible ? "normal" : "invisible",
+    callback: () => {},
+    "expired-callback": () => console.warn("Phone auth reCAPTCHA expired")
+  });
+  return recaptchaVerifierRef;
+}
+
+function requestCurrentPosition() {
+  return new Promise((resolve, reject) => {
+    if (!("geolocation" in navigator)) {
+      reject(new Error("GPS unavailable"));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 0
+    });
+  });
+}
+
+async function upsertCustomerProfile(profile = state.customer, location = state.location) {
+  if (!profile?.uid || !profile?.phone || !location) return;
+  try {
+    await fetch("/api/users/upsert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        firebaseUid: profile.uid,
+        phone: profile.phone,
+        location: {
+          lat: location.latitude,
+          lng: location.longitude
+        },
+        lastLoginAt: new Date().toISOString()
+      })
+    });
+  } catch (error) {
+    console.warn("Failed to upsert customer profile", error);
+  }
+}
+
+async function resolveLocationGate() {
+  if (!state.customer?.uid) {
+    hideLocationGate();
+    finalizeCustomerBootstrap(null);
+    return false;
+  }
+  try {
+    if (navigator.permissions?.query) {
+      const permission = await navigator.permissions.query({ name: "geolocation" });
+      if (permission.state === "granted") {
+        const position = await requestCurrentPosition();
+        applyCapturedLocation(position);
+        hideLocationGate();
+        await upsertCustomerProfile();
+        finalizeCustomerBootstrap(state.customer);
+        if (state.currentView === "account") switchView("home");
+        return true;
+      }
+      if (permission.state === "denied") {
+        showLocationGate("Location permission is required to continue.");
+        finalizeCustomerBootstrap(null);
+        return false;
+      }
+    }
+  } catch (error) {
+    console.warn("Geolocation permission check failed", error);
+  }
+  showLocationGate("Location permission is required to continue.");
+  finalizeCustomerBootstrap(null);
+  return false;
+}
+
 function isStandaloneDisplay() {
   return window.matchMedia?.("(display-mode: standalone)")?.matches
     || window.navigator.standalone === true;
@@ -957,18 +1120,24 @@ function updateAccountUi() {
   if (customer?.displayName && loginName && !loginName.value) {
     loginName.value = customer.displayName;
   }
+  if (!customer) {
+    otpFieldWrap?.classList.add("hidden");
+    verifyCodeButton?.classList.add("hidden");
+    if (loginName) loginName.removeAttribute("disabled");
+  }
   clearLoginError();
   refreshOrderHistory();
 }
 
 function normalizeCustomerProfile(user) {
   if (!user) return null;
+  const fallbackName = pendingCustomerName || localStorage.getItem("customerDisplayName") || "";
   return {
     uid: user.uid || user.userId || user.id || `phone:${String(user.phone || "").replace(/[^\d]/g, "")}`,
-    displayName: user.displayName || user.name || user.display_name || "",
-    email: "",
+    displayName: user.displayName || user.name || user.display_name || fallbackName,
+    email: user.email || "",
     photoURL: user.photoURL || user.photoUrl || user.photoURLString || user.picture || "",
-    phone: String(user.phone || "").replace(/[^\d]/g, "")
+    phone: normalizeMoroccoPhone(user.phone || user.phoneNumber || "") || String(user.phone || user.phoneNumber || "").trim()
   };
 }
 
@@ -976,8 +1145,13 @@ function setCustomerSession(user) {
   const previousPhone = state.customer?.phone || "";
   state.customer = normalizeCustomerProfile(user);
   try {
-    if (state.customer) localStorage.setItem("customerProfile", JSON.stringify(state.customer));
-    else localStorage.removeItem("customerProfile");
+    if (state.customer) {
+      localStorage.setItem("customerProfile", JSON.stringify(state.customer));
+      if (state.customer.displayName) localStorage.setItem("customerDisplayName", state.customer.displayName);
+    } else {
+      localStorage.removeItem("customerProfile");
+      localStorage.removeItem("customerDisplayName");
+    }
   } catch {}
   updateAccountUi();
   if (state.customer?.phone && state.customer.phone !== previousPhone) {
@@ -990,78 +1164,100 @@ function finalizeCustomerBootstrap(user = null, errorMessage = "") {
   authBootstrapResolved = true;
   if (user) {
     setCustomerSession(user);
-    if (state.currentView === "account") {
-      switchView("home");
-    }
     return;
   }
 
-  setCustomerSession(null);
-  switchView("account");
+  if (!locationGateActive) {
+    setCustomerSession(null);
+    switchView("account");
+  }
   if (errorMessage) {
     showLoginError(errorMessage);
   } else {
     accountStatus.textContent = "Connectez-vous pour suivre vos commandes";
-    accountHelp.textContent = "Entrez votre numero pour retrouver vos commandes et votre progression.";
+    accountHelp.textContent = "Entrez votre numero et le code SMS pour suivre vos commandes et votre progression.";
   }
-}
-
-async function initCustomerSession() {
-  try {
-    const savedProfile = JSON.parse(localStorage.getItem("customerProfile") || "null");
-    if (savedProfile && !state.customer) state.customer = normalizeCustomerProfile(savedProfile);
-  } catch {}
-  updateAccountUi();
-  finalizeCustomerBootstrap(state.customer || null);
-  return state.customer;
 }
 
 async function startPhoneLogin() {
-  const phone = String(loginPhone?.value || "").replace(/[^\d]/g, "").trim();
-  const name = String(loginName?.value || "").trim();
+  const phone = normalizeMoroccoPhone(loginPhone?.value);
+  pendingCustomerName = String(loginName?.value || "").trim();
   if (!phone) {
-    showLoginError("Veuillez entrer votre numero de telephone.");
+    showLoginError("Numero invalide. Utilisez +212, 06 ou 07.");
     return;
   }
 
-  phoneLoginButton?.setAttribute("disabled", "true");
-  if (phoneLoginButton) phoneLoginButton.textContent = "Connexion...";
+  setLoginButtonsBusy(true, "Sending...");
   clearLoginError();
 
   try {
-    const response = await fetch("/api/customer-auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone, name })
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(payload.error || "Connexion impossible");
-    }
-    const session = normalizeCustomerProfile(payload.session || { phone, displayName: name });
-    saveStoredPhoneCustomer(session);
-    setCustomerSession(session);
-    switchView("home");
-    showToast("Connexion reussie");
+    console.log("Using Firebase Web phone login");
+    const verifier = ensureRecaptchaMode(false);
+    confirmationResultRef = await signInWithPhoneNumber(auth, phone, verifier);
+    if (loginPhone) loginPhone.value = phone;
+    otpFieldWrap?.classList.remove("hidden");
+    verifyCodeButton?.classList.remove("hidden");
+    loginName?.setAttribute("disabled", "true");
+    showToast("Code SMS envoye");
   } catch (error) {
-    console.error("Phone login failed:", error);
+    console.error("Phone login send code failed:", error);
     try {
-      const fallbackSession = loginWithLocalPhoneFallback(phone, name);
-      setCustomerSession(fallbackSession);
-      switchView("home");
-      showToast("Connexion locale active");
+      const verifier = ensureRecaptchaMode(true);
+      confirmationResultRef = await signInWithPhoneNumber(auth, phone, verifier);
+      if (loginPhone) loginPhone.value = phone;
+      otpFieldWrap?.classList.remove("hidden");
+      verifyCodeButton?.classList.remove("hidden");
+      loginName?.setAttribute("disabled", "true");
+      showToast("Code SMS envoye");
     } catch (fallbackError) {
-      showLoginError(fallbackError?.message || error?.message || "Impossible de vous connecter pour le moment.");
+      console.error("Phone login visible recaptcha failed:", fallbackError);
+      showLoginError(getAuthErrorMessage(fallbackError, getAuthErrorMessage(error, "Impossible d'envoyer le SMS.")));
     }
   } finally {
-    phoneLoginButton?.removeAttribute("disabled");
-    if (phoneLoginButton) phoneLoginButton.textContent = "Continuer";
+    setLoginButtonsBusy(false, confirmationResultRef ? "Send code again" : "Send code");
   }
 }
 
-function logoutPhoneCustomer() {
+async function verifyPhoneOtp() {
+  const code = String(otpCode?.value || "").trim();
+  if (!confirmationResultRef) {
+    showLoginError("Demandez d'abord votre code SMS.");
+    return;
+  }
+  if (!/^\d{6}$/.test(code)) {
+    showLoginError("Entrez le code OTP a 6 chiffres.");
+    return;
+  }
+  setLoginButtonsBusy(true, "Verifying...");
+  clearLoginError();
+  try {
+    await confirmationResultRef.confirm(code);
+    confirmationResultRef = null;
+    showToast("Numero verifie");
+  } catch (error) {
+    console.error("OTP verification failed:", error);
+    showLoginError(getAuthErrorMessage(error, "Code OTP invalide."));
+  } finally {
+    setLoginButtonsBusy(false, "Send code again");
+  }
+}
+
+async function logoutPhoneCustomer() {
+  try {
+    await signOut(auth);
+  } catch (error) {
+    console.warn("Phone logout failed:", error);
+  }
+  confirmationResultRef = null;
+  hideLocationGate();
+  if (loginName) {
+    loginName.removeAttribute("disabled");
+    loginName.value = "";
+  }
+  if (otpCode) otpCode.value = "";
+  otpFieldWrap?.classList.add("hidden");
+  verifyCodeButton?.classList.add("hidden");
   setCustomerSession(null);
-  if (loginName) loginName.value = "";
   switchView("account");
   showToast("Deconnecte");
 }
@@ -1076,7 +1272,7 @@ function getCustomerId() {
 }
 
 function getActiveCustomerPhone() {
-  return String(state.customer?.phone || getSavedCustomerPhone() || "").replace(/[^\d]/g, "").trim();
+  return normalizeMoroccoPhone(state.customer?.phone || getSavedCustomerPhone() || "") || String(state.customer?.phone || getSavedCustomerPhone() || "").trim();
 }
 
 function getSavedCustomerPhone() {
@@ -1086,44 +1282,6 @@ function getSavedCustomerPhone() {
 function setSavedCustomerPhone(phone) {
   const clean = String(phone || "").trim();
   if (clean) localStorage.setItem("lastCheckoutPhone", clean);
-}
-
-function getStoredPhoneCustomers() {
-  try {
-    return JSON.parse(localStorage.getItem("phoneCustomers") || "{}");
-  } catch {
-    return {};
-  }
-}
-
-function saveStoredPhoneCustomer(session) {
-  const phone = String(session?.phone || "").replace(/[^\d]/g, "").trim();
-  if (!phone) return;
-  const customers = getStoredPhoneCustomers();
-  customers[phone] = normalizeCustomerProfile(session);
-  try {
-    localStorage.setItem("phoneCustomers", JSON.stringify(customers));
-  } catch {}
-}
-
-function loginWithLocalPhoneFallback(phone, name = "") {
-  const normalizedPhone = String(phone || "").replace(/[^\d]/g, "").trim();
-  const normalizedName = String(name || "").trim();
-  const customers = getStoredPhoneCustomers();
-  const existing = customers[normalizedPhone];
-  if (existing) {
-    return normalizeCustomerProfile(existing);
-  }
-  if (!normalizedName) {
-    throw new Error("Ajoutez votre nom pour creer votre compte client.");
-  }
-  const created = normalizeCustomerProfile({
-    uid: `phone:${normalizedPhone}`,
-    displayName: normalizedName,
-    phone: normalizedPhone
-  });
-  saveStoredPhoneCustomer(created);
-  return created;
 }
 
 function localizeOrderStatus(status) {
@@ -1460,7 +1618,7 @@ let pushMessaging = null;
 async function syncDeviceToken(token) {
   if (!token) return;
   const payload = {
-    firebaseUid: "",
+    firebaseUid: state.customer?.uid || "",
     phone: getActiveCustomerPhone(),
     platform: "web",
     token
@@ -1719,7 +1877,28 @@ async function requestPushPermission(reason = "manual") {
 }
 
 async function initFirebaseAuth() {
-  return initCustomerSession();
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = async (user = null, errorMessage = "") => {
+      if (settled) return;
+      settled = true;
+      if (user) {
+        setCustomerSession(user);
+        await resolveLocationGate();
+      } else {
+        finalizeCustomerBootstrap(null, errorMessage);
+      }
+      resolve(user);
+    };
+
+    onAuthStateChanged(auth, async firebaseUser => {
+      console.log("Using web Firebase auth state", firebaseUser ? firebaseUser.uid : "signed-out");
+      await finish(firebaseUser ? mapFirebasePhoneUser(firebaseUser) : null);
+    }, async error => {
+      console.error("Firebase auth state failed:", error);
+      await finish(null, getAuthErrorMessage(error, "La connexion telephone Firebase a echoue."));
+    });
+  });
 }
 
 async function startGoogleLogin() {
@@ -2421,6 +2600,7 @@ function applyCapturedLocation(position) {
   useLocationButton.textContent = t("updateLocation");
   useLocationButton.disabled = false;
   renderCart();
+  upsertCustomerProfile().catch(error => console.warn("Customer location sync failed", error));
 }
 
 async function captureLocation() {
@@ -2494,12 +2674,31 @@ function canDeliverToCurrentLocation(showMessage = false) {
   return true;
 }
 
+function ensureAuthenticatedWithLocation(showMessage = true) {
+  if (!state.customer?.uid || !state.customer?.phone) {
+    if (showMessage) {
+      switchView("account");
+      showLoginError("Connectez-vous avec votre numero pour continuer.");
+    }
+    return false;
+  }
+  if (!state.location?.latitude || !state.location?.longitude) {
+    if (showMessage) {
+      showLocationGate("Location permission is required to continue.");
+      showToast("Veuillez autoriser la localisation pour calculer la livraison.");
+    }
+    return false;
+  }
+  return true;
+}
+
 function buildOrderPayload(formData, cartSummary, whatsappMessage) {
+  const authenticatedPhone = state.customer?.phone || "";
   return {
     customerName: String(formData.get("customerName") || "").trim(),
-    customerPhone: String(formData.get("customerPhone") || "").trim(),
+    customerPhone: String(formData.get("customerPhone") || authenticatedPhone || "").trim(),
     customerEmail: "",
-    firebaseUid: "",
+    firebaseUid: state.customer?.uid || "",
     mode: state.mode,
     address: state.mode === "delivery" ? String(formData.get("customerAddress") || "").trim() : "Pickup from shop",
     latitude: state.location?.latitude ?? null,
@@ -2563,7 +2762,7 @@ function buildOrderMessage(formData, { orderId = getCustomerId(), cartSummary = 
     "New shop order",
     "",
     `Customer: ${formData.get("customerName")}`,
-    `Google account: ${state.customer?.email || "Not signed in"}`,
+    `Authenticated UID: ${state.customer?.uid || "Not signed in"}`,
     `Phone: ${formData.get("customerPhone")}`,
     `Mode: ${state.mode}`,
     `Address: ${address}`,
@@ -2714,7 +2913,26 @@ phoneLoginForm?.addEventListener("submit", event => {
   event.preventDefault();
   startPhoneLogin();
 });
+verifyCodeButton?.addEventListener("click", verifyPhoneOtp);
 customerLogout?.addEventListener("click", logoutPhoneCustomer);
+allowLocationButton?.addEventListener("click", async () => {
+  allowLocationButton.setAttribute("disabled", "true");
+  if (locationGateMessage) locationGateMessage.textContent = "Demande de localisation...";
+  try {
+    const position = await requestCurrentPosition();
+    applyCapturedLocation(position);
+    hideLocationGate();
+    await upsertCustomerProfile();
+    finalizeCustomerBootstrap(state.customer);
+    switchView("home");
+  } catch (error) {
+    console.warn("Required location request failed", error);
+    showLocationGate("Location permission is required to continue.");
+    showToast("Veuillez autoriser la localisation pour calculer la livraison.");
+  } finally {
+    allowLocationButton.removeAttribute("disabled");
+  }
+});
 closeOptions?.addEventListener("click", closeOptionsModal);
 optionsModal?.addEventListener("click", event => {
   if (event.target === optionsModal) closeOptionsModal();
@@ -2746,6 +2964,7 @@ promoCodeInput?.addEventListener("input", () => {
 });
 document.querySelector("#checkoutButton")?.addEventListener("click", () => {
   if (!ensureStoreOpen(true)) return;
+  if (!ensureAuthenticatedWithLocation(true)) return;
   const { total, minimumOrderAmount, minimumOrderMet } = getCartDetails();
   if (total === 0) {
     showToast(t("addProductsFirst"));
@@ -2778,6 +2997,7 @@ checkoutModal.addEventListener("click", event => {
 checkoutForm.addEventListener("submit", async event => {
   event.preventDefault();
   if (!ensureStoreOpen(true)) return;
+  if (!ensureAuthenticatedWithLocation(true)) return;
   if (!canDeliverToCurrentLocation(true)) return;
   const formData = new FormData(checkoutForm);
   const cartSummary = getCartDetails();
