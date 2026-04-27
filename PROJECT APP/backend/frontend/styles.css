@@ -265,13 +265,13 @@ button:active {
   width: min(360px, 100%);
   display: grid;
   gap: 14px;
-  padding: 24px;
-  border-radius: 24px;
+  padding: 26px 24px;
+  border-radius: 28px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background:
-    radial-gradient(circle at top right, rgba(255, 139, 61, 0.08), transparent 36%),
-    linear-gradient(180deg, rgba(24, 24, 27, 0.96), rgba(12, 12, 14, 0.96));
-  box-shadow: 0 28px 48px rgba(0, 0, 0, 0.34);
+    radial-gradient(circle at top right, rgba(255, 139, 61, 0.12), transparent 36%),
+    linear-gradient(180deg, rgba(24, 24, 27, 0.98), rgba(12, 12, 14, 0.97));
+  box-shadow: 0 28px 48px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(255,255,255,0.03) inset;
   text-align: center;
 }
 
@@ -2483,15 +2483,48 @@ button:active {
   gap: 14px;
 }
 
+.phone-login-form-shell {
+  display: grid;
+  gap: 14px;
+}
+
+.auth-heading {
+  display: grid;
+  gap: 8px;
+}
+
+.auth-heading p,
+.auth-heading h2,
+.auth-heading span {
+  margin: 0;
+}
+
+.auth-heading p {
+  color: #ffbb8f;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.auth-heading h2 {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.auth-heading span {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
 .phone-login-form {
   display: grid;
   gap: 14px;
-  padding: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 22px;
+  padding: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 24px;
   background:
-    radial-gradient(circle at top right, rgba(255, 139, 61, 0.08), transparent 32%),
-    linear-gradient(180deg, rgba(24, 24, 27, 0.95), rgba(13, 13, 16, 0.94));
+    radial-gradient(circle at top right, rgba(255, 139, 61, 0.12), transparent 32%),
+    linear-gradient(180deg, rgba(24, 24, 27, 0.96), rgba(13, 13, 16, 0.95));
   box-shadow: 0 18px 30px rgba(0, 0, 0, 0.22);
 }
 
@@ -2504,6 +2537,11 @@ button:active {
   color: #f3f4f6;
   font-size: 0.88rem;
   font-weight: 800;
+}
+
+.auth-helper {
+  color: #a5a8b4;
+  font-size: 0.78rem;
 }
 
 .auth-field input {
@@ -2532,6 +2570,16 @@ button:active {
   color: white;
   font-weight: 950;
   box-shadow: 0 14px 30px rgba(214, 0, 0, 0.28);
+  transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
+}
+
+.auth-submit:hover,
+.auth-submit:focus-visible {
+  box-shadow: 0 18px 38px rgba(214, 0, 0, 0.34), 0 0 22px rgba(255, 115, 0, 0.14);
+}
+
+.auth-submit:active {
+  transform: scale(0.985);
 }
 
 .auth-submit-secondary {
@@ -2543,6 +2591,94 @@ button:active {
 .phone-login-actions {
   display: grid;
   gap: 10px;
+}
+
+.otp-step {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.otp-step-head {
+  display: grid;
+  gap: 4px;
+}
+
+.otp-step-head span {
+  color: #f3f4f6;
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.otp-step-head small {
+  color: #ffcfaa;
+}
+
+.otp-hidden-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+}
+
+.otp-boxes {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.otp-box {
+  min-height: 58px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: white;
+  font-size: 1.45rem;
+  font-weight: 900;
+  transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.otp-box.active,
+.otp-box:focus-visible {
+  border-color: rgba(255, 72, 72, 0.66);
+  box-shadow: 0 0 0 4px rgba(255, 0, 0, 0.12), 0 0 24px rgba(255, 115, 0, 0.08);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.otp-box.filled {
+  border-color: rgba(255, 115, 0, 0.35);
+}
+
+.otp-box:active {
+  transform: scale(0.97);
+}
+
+.otp-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.otp-link,
+.auth-support-link {
+  border: 0;
+  background: transparent;
+  color: #ffbb8f;
+  font-weight: 800;
+  padding: 0;
+}
+
+.otp-link[disabled] {
+  opacity: 0.56;
+}
+
+.auth-support-link {
+  justify-self: start;
 }
 
 .recaptcha-container {

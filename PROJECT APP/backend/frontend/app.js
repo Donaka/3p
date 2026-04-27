@@ -368,6 +368,12 @@ const customerLogout = document.querySelector("#customerLogout");
 const otpFieldWrap = document.querySelector("#otpFieldWrap");
 const otpCode = document.querySelector("#otpCode");
 const verifyCodeButton = document.querySelector("#verifyCodeButton");
+const otpSentPreview = document.querySelector("#otpSentPreview");
+const otpBoxes = [...document.querySelectorAll("[data-otp-index]")];
+const editPhoneButton = document.querySelector("#editPhoneButton");
+const resendCodeButton = document.querySelector("#resendCodeButton");
+const resendCountdown = document.querySelector("#resendCountdown");
+const otpSupportButton = document.querySelector("#otpSupportButton");
 const recaptchaContainer = document.querySelector("#recaptchaContainer");
 const recaptchaFallback = document.querySelector("#recaptchaFallback");
 const locationGate = document.querySelector("#locationGate");
@@ -431,6 +437,9 @@ let locationGateActive = false;
 let pendingCustomerName = "";
 let authStateUnsubscribe = null;
 let authBootstrapPromise = null;
+let lastOtpPhone = "";
+let resendCooldown = 0;
+let resendTimer = null;
 
 const money = value => `${Number.isInteger(value) ? value : value.toFixed(2)} DHS`;
 
@@ -834,7 +843,7 @@ function clearLoginError() {
   accountLoginError.classList.add("hidden");
 }
 
-function showLocationGate(message = "Location permission is required to continue.") {
+function showLocationGate(message = "La localisation est requise pour continuer.") {
   locationGateActive = true;
   if (locationGateMessage) locationGateMessage.textContent = message;
   locationGate?.classList.remove("hidden");
@@ -882,15 +891,81 @@ function getAuthErrorMessage(error, fallback = "Impossible de vous connecter pou
   return error?.message || fallback;
 }
 
-function setLoginButtonsBusy(busy, label = "Send code") {
+function setLoginButtonsBusy(busy, label = "Envoyer le code") {
   if (busy) {
     phoneLoginButton?.setAttribute("disabled", "true");
     verifyCodeButton?.setAttribute("disabled", "true");
+    verifyCodeButton?.setAttribute("data-busy", "true");
   } else {
     phoneLoginButton?.removeAttribute("disabled");
     verifyCodeButton?.removeAttribute("disabled");
+    verifyCodeButton?.removeAttribute("data-busy");
   }
   if (phoneLoginButton) phoneLoginButton.textContent = label;
+  if (!busy) syncOtpBoxes(otpCode?.value || "");
+}
+
+function syncOtpBoxes(value = "") {
+  const digits = String(value || "").replace(/[^\d]/g, "").slice(0, 6);
+  if (otpCode && otpCode.value !== digits) otpCode.value = digits;
+  otpBoxes.forEach((box, index) => {
+    const digit = digits[index] || "";
+    box.textContent = digit || "•";
+    box.classList.toggle("filled", Boolean(digit));
+    box.classList.toggle("active", index === Math.min(digits.length, 5) && digits.length < 6);
+  });
+  if (digits.length === 6) {
+    verifyCodeButton?.removeAttribute("disabled");
+  } else if (!verifyCodeButton?.hasAttribute("data-busy")) {
+    verifyCodeButton?.setAttribute("disabled", "true");
+  }
+}
+
+function updateOtpStepUi(phone = "") {
+  otpFieldWrap?.classList.remove("hidden");
+  verifyCodeButton?.classList.remove("hidden");
+  loginName?.setAttribute("disabled", "true");
+  lastOtpPhone = phone || lastOtpPhone;
+  if (otpSentPreview) otpSentPreview.textContent = `Code envoye a ${lastOtpPhone || "votre numero"}`;
+  syncOtpBoxes("");
+  otpCode?.focus();
+}
+
+function resetOtpStep() {
+  confirmationResultRef = null;
+  lastOtpPhone = "";
+  otpFieldWrap?.classList.add("hidden");
+  verifyCodeButton?.classList.add("hidden");
+  verifyCodeButton?.setAttribute("disabled", "true");
+  if (otpCode) otpCode.value = "";
+  loginName?.removeAttribute("disabled");
+  otpSentPreview && (otpSentPreview.textContent = "Code envoye a votre numero.");
+  stopResendCountdown();
+  resendCooldown = 0;
+  if (resendCountdown) resendCountdown.textContent = "30s";
+  resendCodeButton?.setAttribute("disabled", "true");
+}
+
+function startResendCountdown(seconds = 30) {
+  stopResendCountdown();
+  resendCooldown = seconds;
+  resendCodeButton?.setAttribute("disabled", "true");
+  if (resendCountdown) resendCountdown.textContent = `${resendCooldown}s`;
+  resendTimer = setInterval(() => {
+    resendCooldown -= 1;
+    if (resendCountdown) resendCountdown.textContent = `${Math.max(0, resendCooldown)}s`;
+    if (resendCooldown <= 0) {
+      stopResendCountdown();
+      resendCodeButton?.removeAttribute("disabled");
+    }
+  }, 1000);
+}
+
+function stopResendCountdown() {
+  if (resendTimer) {
+    clearInterval(resendTimer);
+    resendTimer = null;
+  }
 }
 
 function ensureRecaptchaMode(visible = false) {
@@ -965,7 +1040,7 @@ async function resolveLocationGate() {
         return true;
       }
       if (permission.state === "denied") {
-        showLocationGate("Location permission is required to continue.");
+        showLocationGate("La localisation est requise pour continuer.");
         finalizeCustomerBootstrap(null);
         return false;
       }
@@ -973,7 +1048,7 @@ async function resolveLocationGate() {
   } catch (error) {
     console.warn("Geolocation permission check failed", error);
   }
-  showLocationGate("Location permission is required to continue.");
+  showLocationGate("La localisation est requise pour continuer.");
   finalizeCustomerBootstrap(null);
   return false;
 }
@@ -1123,9 +1198,7 @@ function updateAccountUi() {
     loginName.value = customer.displayName;
   }
   if (!customer) {
-    otpFieldWrap?.classList.add("hidden");
-    verifyCodeButton?.classList.add("hidden");
-    if (loginName) loginName.removeAttribute("disabled");
+    resetOtpStep();
   }
   clearLoginError();
   refreshOrderHistory();
@@ -1189,7 +1262,7 @@ async function startPhoneLogin() {
     return;
   }
 
-  setLoginButtonsBusy(true, "Sending...");
+  setLoginButtonsBusy(true, "Envoi...");
   clearLoginError();
 
   try {
@@ -1197,9 +1270,8 @@ async function startPhoneLogin() {
     const verifier = ensureRecaptchaMode(false);
     confirmationResultRef = await signInWithPhoneNumber(auth, phone, verifier);
     if (loginPhone) loginPhone.value = phone;
-    otpFieldWrap?.classList.remove("hidden");
-    verifyCodeButton?.classList.remove("hidden");
-    loginName?.setAttribute("disabled", "true");
+    updateOtpStepUi(phone);
+    startResendCountdown(30);
     showToast("Code SMS envoye");
   } catch (error) {
     console.error("Phone login send code failed:", error);
@@ -1207,21 +1279,20 @@ async function startPhoneLogin() {
       const verifier = ensureRecaptchaMode(true);
       confirmationResultRef = await signInWithPhoneNumber(auth, phone, verifier);
       if (loginPhone) loginPhone.value = phone;
-      otpFieldWrap?.classList.remove("hidden");
-      verifyCodeButton?.classList.remove("hidden");
-      loginName?.setAttribute("disabled", "true");
+      updateOtpStepUi(phone);
+      startResendCountdown(30);
       showToast("Code SMS envoye");
     } catch (fallbackError) {
       console.error("Phone login visible recaptcha failed:", fallbackError);
       showLoginError(getAuthErrorMessage(fallbackError, getAuthErrorMessage(error, "Impossible d'envoyer le SMS.")));
     }
   } finally {
-    setLoginButtonsBusy(false, confirmationResultRef ? "Send code again" : "Send code");
+    setLoginButtonsBusy(false, confirmationResultRef ? "Renvoyer le code" : "Envoyer le code");
   }
 }
 
 async function verifyPhoneOtp() {
-  const code = String(otpCode?.value || "").trim();
+  const code = String(otpCode?.value || "").replace(/[^\d]/g, "").slice(0, 6);
   if (!confirmationResultRef) {
     showLoginError("Demandez d'abord votre code SMS.");
     return;
@@ -1230,7 +1301,7 @@ async function verifyPhoneOtp() {
     showLoginError("Entrez le code OTP a 6 chiffres.");
     return;
   }
-  setLoginButtonsBusy(true, "Verifying...");
+  setLoginButtonsBusy(true, "Verification...");
   clearLoginError();
   try {
     const result = await confirmationResultRef.confirm(code);
@@ -1245,12 +1316,13 @@ async function verifyPhoneOtp() {
         hideSplashScreen();
       }
     }
+    resetOtpStep();
     showToast("Numero verifie");
   } catch (error) {
     console.error("OTP verification failed:", error);
     showLoginError(getAuthErrorMessage(error, "Code OTP invalide."));
   } finally {
-    setLoginButtonsBusy(false, "Send code again");
+    setLoginButtonsBusy(false, "Renvoyer le code");
   }
 }
 
@@ -2712,7 +2784,7 @@ function ensureAuthenticatedWithLocation(showMessage = true) {
   }
   if (!state.location?.latitude || !state.location?.longitude) {
     if (showMessage) {
-      showLocationGate("Location permission is required to continue.");
+      showLocationGate("La localisation est requise pour continuer.");
       showToast("Veuillez autoriser la localisation pour calculer la livraison.");
     }
     return false;
@@ -2941,7 +3013,62 @@ phoneLoginForm?.addEventListener("submit", event => {
   event.preventDefault();
   startPhoneLogin();
 });
+otpCode?.addEventListener("input", event => {
+  const digits = String(event.target.value || "").replace(/[^\d]/g, "").slice(0, 6);
+  event.target.value = digits;
+  syncOtpBoxes(digits);
+});
+otpCode?.addEventListener("keydown", event => {
+  if (event.key === "Enter" && String(otpCode.value || "").length === 6) {
+    event.preventDefault();
+    verifyPhoneOtp();
+  }
+});
+otpBoxes.forEach((box, index) => {
+  box.addEventListener("click", () => otpCode?.focus());
+  box.addEventListener("keydown", event => {
+    if (!otpCode) return;
+    const current = String(otpCode.value || "").replace(/[^\d]/g, "").slice(0, 6);
+    if (/^\d$/.test(event.key)) {
+      event.preventDefault();
+      const next = `${current.slice(0, index)}${event.key}${current.slice(index + 1)}`.slice(0, 6);
+      syncOtpBoxes(next);
+      otpCode.value = next;
+      return;
+    }
+    if (event.key === "Backspace") {
+      event.preventDefault();
+      const chars = current.split("");
+      const targetIndex = chars[index] ? index : Math.max(0, index - 1);
+      chars.splice(targetIndex, 1);
+      const next = chars.join("");
+      syncOtpBoxes(next);
+      otpCode.value = next;
+    }
+  });
+});
+otpCode?.addEventListener("paste", event => {
+  const pasted = event.clipboardData?.getData("text") || "";
+  const digits = pasted.replace(/[^\d]/g, "").slice(0, 6);
+  if (!digits) return;
+  event.preventDefault();
+  otpCode.value = digits;
+  syncOtpBoxes(digits);
+});
 verifyCodeButton?.addEventListener("click", verifyPhoneOtp);
+editPhoneButton?.addEventListener("click", () => {
+  resetOtpStep();
+  clearLoginError();
+  loginPhone?.focus();
+});
+resendCodeButton?.addEventListener("click", async () => {
+  if (resendCooldown > 0) return;
+  await startPhoneLogin();
+});
+otpSupportButton?.addEventListener("click", () => {
+  const whatsappNumber = String(state.settings.shopWhatsAppNumber || defaultShopSettings.shopWhatsAppNumber || shopWhatsAppNumber).replace(/[^\d]/g, "");
+  openExternalUrl(`https://wa.me/${whatsappNumber}?text=${encodeURIComponent("Bonjour, j'ai un probleme avec le code SMS de connexion.")}`);
+});
 customerLogout?.addEventListener("click", logoutPhoneCustomer);
 allowLocationButton?.addEventListener("click", async () => {
   allowLocationButton.setAttribute("disabled", "true");
@@ -2955,7 +3082,7 @@ allowLocationButton?.addEventListener("click", async () => {
     switchView("home");
   } catch (error) {
     console.warn("Required location request failed", error);
-    showLocationGate("Location permission is required to continue.");
+    showLocationGate("La localisation est requise pour continuer.");
     showToast("Veuillez autoriser la localisation pour calculer la livraison.");
   } finally {
     allowLocationButton.removeAttribute("disabled");

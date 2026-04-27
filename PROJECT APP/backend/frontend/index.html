@@ -48,9 +48,9 @@
       <section class="location-gate hidden" id="locationGate" aria-label="Location permission required">
         <div class="location-gate-card">
           <p>Localisation</p>
-          <h1>Autorisez votre position</h1>
-          <span id="locationGateMessage">Location permission is required to continue.</span>
-          <button class="auth-submit" id="allowLocationButton" type="button">Allow location</button>
+          <h1>Autoriser la localisation</h1>
+          <span id="locationGateMessage">Cela nous aide a confirmer votre commande.</span>
+          <button class="auth-submit" id="allowLocationButton" type="button">Autoriser</button>
         </div>
       </section>
 
@@ -196,28 +196,51 @@
             </div>
 
             <div class="account-login-state" id="accountLoggedOutState">
-              <p class="account-empty-copy">Entrez votre numero pour suivre vos commandes et revenir plus vite la prochaine fois.</p>
+              <div class="phone-login-form-shell">
+                <div class="auth-heading">
+                  <p>3P CHICKEN POPS</p>
+                  <h2>Connexion</h2>
+                  <span>Entrez votre numero pour suivre vos commandes</span>
+                </div>
               <form class="phone-login-form" id="phoneLoginForm">
                 <label class="auth-field">
                   <span>Numero de telephone</span>
                   <input id="loginPhone" name="loginPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+212 6 00 00 00 00" required>
+                  <small class="auth-helper">Maroc: 06, 07 ou +212</small>
                 </label>
                 <label class="auth-field">
                   <span>Nom (si c'est votre premiere visite)</span>
                   <input id="loginName" name="loginName" type="text" autocomplete="name" placeholder="Votre nom">
                 </label>
-                <label class="auth-field hidden" id="otpFieldWrap">
-                  <span>Code SMS</span>
-                  <input id="otpCode" name="otpCode" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="123456">
-                </label>
+                <div class="otp-step hidden" id="otpFieldWrap">
+                  <div class="otp-step-head">
+                    <span>Code SMS</span>
+                    <small id="otpSentPreview">Code envoye a votre numero.</small>
+                  </div>
+                  <input id="otpCode" name="otpCode" type="text" class="otp-hidden-input" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" placeholder="123456">
+                  <div class="otp-boxes" id="otpBoxes" aria-label="Code OTP">
+                    <button class="otp-box" type="button" data-otp-index="0">•</button>
+                    <button class="otp-box" type="button" data-otp-index="1">•</button>
+                    <button class="otp-box" type="button" data-otp-index="2">•</button>
+                    <button class="otp-box" type="button" data-otp-index="3">•</button>
+                    <button class="otp-box" type="button" data-otp-index="4">•</button>
+                    <button class="otp-box" type="button" data-otp-index="5">•</button>
+                  </div>
+                  <div class="otp-meta">
+                    <button class="otp-link" id="editPhoneButton" type="button">Modifier le numero</button>
+                    <button class="otp-link" id="resendCodeButton" type="button" disabled>Renvoyer le code <span id="resendCountdown">30s</span></button>
+                  </div>
+                </div>
                 <p class="login-error hidden" id="accountLoginError" role="status" aria-live="polite"></p>
                 <div class="phone-login-actions">
-                  <button class="auth-submit" id="phoneLoginButton" type="submit">Send code</button>
-                  <button class="auth-submit auth-submit-secondary hidden" id="verifyCodeButton" type="button">Verify</button>
+                  <button class="auth-submit" id="phoneLoginButton" type="submit">Envoyer le code</button>
+                  <button class="auth-submit auth-submit-secondary hidden" id="verifyCodeButton" type="button" disabled>Verifier</button>
                 </div>
                 <div id="recaptchaContainer" class="recaptcha-container hidden"></div>
                 <div id="recaptchaFallback" class="recaptcha-container hidden"></div>
+                <button class="auth-support-link" id="otpSupportButton" type="button">Probleme de code ? Contacter WhatsApp</button>
               </form>
+              </div>
             </div>
 
             <div class="account-login-state hidden" id="accountLoggedInState">
