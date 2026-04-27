@@ -2250,7 +2250,7 @@ const server = createServer(async (request, response) => {
   }
 
   const orderStatusMatch = url.pathname.match(/^\/api\/orders\/(\d+)\/status$/);
-  if (orderStatusMatch && request.method === "PATCH") {
+  if (orderStatusMatch && (request.method === "PATCH" || request.method === "PUT")) {
     if (!isAdminAuthorized(request)) {
       sendJson(response, 401, { error: "Invalid admin password" });
       return;
@@ -2267,6 +2267,96 @@ const server = createServer(async (request, response) => {
     } catch (error) {
       const status = /DATABASE_URL/i.test(error.message) ? 503 : 400;
       sendJson(response, status, { error: error.message });
+      return;
+    }
+  }
+
+  // Menu Management CRUD
+  if (url.pathname === "/api/menu/product" && request.method === "POST") {
+    if (!isAdminAuthorized(request)) { sendJson(response, 401, { error: "Unauthorized" }); return; }
+    try {
+      const incoming = await readJsonBody(request);
+      const menu = await loadMenuSafe();
+      const newProduct = {
+        id: `p${Date.now()}`,
+        ...incoming,
+        available: incoming.available !== false
+      };
+      menu.products.push(newProduct);
+      const saved = writeMenu(menu);
+      await saveMenuToDb(saved);
+      sendJson(response, 201, newProduct);
+    } catch (e) { sendJson(response, 400, { error: e.message }); }
+    return;
+  }
+
+  const productMatch = url.pathname.match(/^\/api\/menu\/product\/(.+)$/);
+  if (productMatch) {
+    if (!isAdminAuthorized(request)) { sendJson(response, 401, { error: "Unauthorized" }); return; }
+    const productId = productMatch[1];
+    if (request.method === "PUT") {
+      try {
+        const incoming = await readJsonBody(request);
+        const menu = await loadMenuSafe();
+        const index = menu.products.findIndex(p => String(p.id) === String(productId));
+        if (index === -1) throw new Error("Product not found");
+        menu.products[index] = { ...menu.products[index], ...incoming };
+        const saved = writeMenu(menu);
+        await saveMenuToDb(saved);
+        sendJson(response, 200, menu.products[index]);
+      } catch (e) { sendJson(response, 400, { error: e.message }); }
+      return;
+    }
+    if (request.method === "DELETE") {
+      try {
+        const menu = await loadMenuSafe();
+        menu.products = menu.products.filter(p => String(p.id) !== String(productId));
+        const saved = writeMenu(menu);
+        await saveMenuToDb(saved);
+        sendJson(response, 200, { success: true });
+      } catch (e) { sendJson(response, 400, { error: e.message }); }
+      return;
+    }
+  }
+
+  if (url.pathname === "/api/menu/category" && request.method === "POST") {
+    if (!isAdminAuthorized(request)) { sendJson(response, 401, { error: "Unauthorized" }); return; }
+    try {
+      const incoming = await readJsonBody(request);
+      const menu = await loadMenuSafe();
+      menu.categories.push(incoming);
+      const saved = writeMenu(menu);
+      await saveMenuToDb(saved);
+      sendJson(response, 201, incoming);
+    } catch (e) { sendJson(response, 400, { error: e.message }); }
+    return;
+  }
+
+  const categoryMatch = url.pathname.match(/^\/api\/menu\/category\/(.+)$/);
+  if (categoryMatch) {
+    if (!isAdminAuthorized(request)) { sendJson(response, 401, { error: "Unauthorized" }); return; }
+    const categoryName = decodeURIComponent(categoryMatch[1]);
+    if (request.method === "PUT") {
+      try {
+        const incoming = await readJsonBody(request);
+        const menu = await loadMenuSafe();
+        const index = menu.categories.findIndex(c => (c.name || c) === categoryName);
+        if (index === -1) throw new Error("Category not found");
+        menu.categories[index] = { ...(typeof menu.categories[index] === "object" ? menu.categories[index] : { name: menu.categories[index] }), ...incoming };
+        const saved = writeMenu(menu);
+        await saveMenuToDb(saved);
+        sendJson(response, 200, menu.categories[index]);
+      } catch (e) { sendJson(response, 400, { error: e.message }); }
+      return;
+    }
+    if (request.method === "DELETE") {
+      try {
+        const menu = await loadMenuSafe();
+        menu.categories = menu.categories.filter(c => (c.name || c) !== categoryName);
+        const saved = writeMenu(menu);
+        await saveMenuToDb(saved);
+        sendJson(response, 200, { success: true });
+      } catch (e) { sendJson(response, 400, { error: e.message }); }
       return;
     }
   }
