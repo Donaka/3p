@@ -538,6 +538,18 @@ function mapNotificationRow(row) {
   };
 }
 
+function mapDeviceTokenRow(row) {
+  return {
+    id: Number(row.id),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    firebaseUid: row.firebase_uid,
+    phone: row.phone,
+    platform: row.platform,
+    token: row.token
+  };
+}
+
 function getEstimatedTime(order, activeOrders = 0, preparationTimeBase = fallbackSettings.preparationTimeBase) {
   if (order.status === "delivered") return "Livree";
   if (order.status === "cancelled") return "Annulee";
@@ -1464,6 +1476,18 @@ async function listNotifications({ customerId = "" } = {}) {
   });
 }
 
+async function listDeviceTokens() {
+  return withDatabase(async () => {
+    const result = await dbPool.query(`
+      SELECT *
+      FROM device_tokens
+      ORDER BY updated_at DESC
+      LIMIT 1000
+    `);
+    return result.rows.map(mapDeviceTokenRow);
+  });
+}
+
 async function upsertDeviceToken({ firebaseUid = "", phone = "", platform = "android", token = "" } = {}) {
   return withDatabase(async () => {
     const cleanToken = String(token || "").trim();
@@ -2012,6 +2036,22 @@ const server = createServer(async (request, response) => {
         customerId: String(url.searchParams.get("customerId") || "").trim()
       });
       sendJson(response, 200, { notifications });
+      return;
+    } catch (error) {
+      const status = /DATABASE_URL/i.test(error.message) ? 503 : 500;
+      sendJson(response, status, { error: error.message });
+      return;
+    }
+  }
+
+  if (url.pathname === "/api/device-tokens" && request.method === "GET") {
+    if (!isAdminAuthorized(request)) {
+      sendJson(response, 401, { error: "Invalid admin password" });
+      return;
+    }
+    try {
+      const tokens = await listDeviceTokens();
+      sendJson(response, 200, { tokens });
       return;
     } catch (error) {
       const status = /DATABASE_URL/i.test(error.message) ? 503 : 500;
