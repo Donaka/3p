@@ -41,16 +41,41 @@ const messaging = firebase.messaging();
 messaging.onBackgroundMessage(function(payload) {
   const notificationTitle = payload.notification.title;
   const notificationOptions = {
-    body: payload.notification.body,
-    icon: '/logo-3p.png',
-    badge: '/icon.svg'
+    body: payload.notification?.body || payload.data?.body || "",
+    icon: payload.notification?.icon || payload.data?.icon || '/logo-3p.png',
+    badge: payload.notification?.badge || payload.data?.badge || '/icon.svg',
+    image: payload.notification?.image || payload.data?.image || null,
+    data: {
+      ...(payload.data || {}),
+      url: payload.data?.url || '/'
+    },
+    tag: payload.data?.tag || '3p-notification',
+    renotify: true
   };
-  if (payload.notification.image) {
-    notificationOptions.image = payload.notification.image;
-  }
 
   const showPromise = self.registration.showNotification(notificationTitle, notificationOptions);
+
   
   // Wait for both saving and showing to finish to prevent SW termination
   return Promise.all([showPromise, saveNotificationToDB(payload).catch(console.error)]);
 });
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const urlToOpen = event.notification.data?.url || '/';
+  
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then(windowClients => {
+        for (let client of windowClients) {
+          if (client.url === urlToOpen && 'focus' in client) {
+            return client.focus();
+          }
+        }
+        if (clients.openWindow) {
+          return clients.openWindow(urlToOpen);
+        }
+      })
+  );
+});
+

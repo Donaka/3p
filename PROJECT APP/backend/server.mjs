@@ -21,13 +21,15 @@ const serviceAccountPath = firstExistingPath(
   join(root, "data", "serviceAccountKey.json"),
   join(root, "serviceAccountKey.json")
 );
+let adminInitialized = false;
 if (firebaseServiceAccountJson.trim()) {
   try {
     const serviceAccount = JSON.parse(firebaseServiceAccountJson);
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });
-    console.log("Firebase Admin initialized from environment");
+    adminInitialized = true;
+    console.log("Firebase Admin initialized from environment SUCCESS");
   } catch (e) {
     console.error("Error initializing Firebase Admin from environment:", e);
   }
@@ -37,13 +39,15 @@ if (firebaseServiceAccountJson.trim()) {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });
-    console.log("Firebase Admin initialized from local file");
+    adminInitialized = true;
+    console.log("Firebase Admin initialized from local file SUCCESS");
   } catch (e) {
     console.error("Error initializing Firebase Admin:", e);
   }
 } else {
   console.log("No Firebase Admin service account found in env or local file, push notifications disabled.");
 }
+
 
 const tokensPath = firstExistingPath(
   join(root, "data", "tokens.json"),
@@ -57,11 +61,20 @@ function readTokens() {
   if (!existsSync(tokensPath)) writeFileSync(tokensPath, JSON.stringify({}, null, 2));
   return JSON.parse(readFileSync(tokensPath, "utf8"));
 }
-function saveToken(customerId, token) {
+function saveToken(customerId, tokenData) {
   const tokens = readTokens();
-  tokens[customerId] = token;
+  // Support both old format (string token) and new format (object)
+  const newToken = typeof tokenData === "string" ? { token: tokenData } : tokenData;
+  
+  tokens[customerId] = {
+    ...(tokens[customerId] && typeof tokens[customerId] === "object" ? tokens[customerId] : {}),
+    ...newToken,
+    updatedAt: new Date().toISOString()
+  };
+  
   writeFileSync(tokensPath, JSON.stringify(tokens, null, 2));
 }
+
 
 function deleteToken(customerId) {
   const tokens = readTokens();
@@ -1799,16 +1812,34 @@ function resolvePath(url) {
 const server = createServer(async (request, response) => {
   const url = new URL(request.url || "/", `https://${request.headers.host || "3p-production.up.railway.app"}`);
 
+  if (url.pathname === "/api/push/debug" && request.method === "GET") {
+    if (!isAdminAuthorized(request)) {
+      sendJson(response, 401, { error: "Invalid admin password" });
+      return;
+    }
+    const tokens = readTokens();
+    let dbCount = 0;
+    try {
+      if (dbPool) {
+        const result = await dbPool.query("SELECT COUNT(*) FROM device_tokens");
+        dbCount = parseInt(result.rows[0].count);
+      }
+    } catch (e) {}
+    sendJson(response, 200, {
+      adminInitialized,
+      tokenCount: Object.keys(tokens).length,
+      databaseTokenCount: dbCount
+    });
+    return;
+  }
+
+
   if (url.pathname === "/api/tokens" && request.method === "POST") {
     try {
-      const { customerId, token } = await readJsonBody(request);
+      const payload = await readJsonBody(request);
+      const { customerId, token } = payload;
       if (customerId && token) {
-        let tokens = {};
-        if (existsSync(tokensPath)) {
-          tokens = JSON.parse(readFileSync(tokensPath, "utf8"));
-        }
-        tokens[customerId] = token;
-        writeFileSync(tokensPath, JSON.stringify(tokens, null, 2));
+        saveToken(customerId, payload);
       }
       sendJson(response, 200, { success: true });
     } catch (e) {
@@ -1816,6 +1847,7 @@ const server = createServer(async (request, response) => {
     }
     return;
   }
+
 
   if (url.pathname === "/api/device-token" && request.method === "POST") {
     try {
@@ -1836,10 +1868,17 @@ const server = createServer(async (request, response) => {
       return;
     }
     try {
-      const { customerId, title, message, imageUrl, linkedProductId, linkedCategoryId, ctaText, startsAt, endsAt, active } = await readJsonBody(request);
+      const payload = await readJsonBody(request);
+      const { customerId, phone, firebaseUid, orderId, title, message, imageUrl, linkedProductId, linkedCategoryId, ctaText, startsAt, endsAt, active } = payload;
+      
+      if (!adminInitialized) {
+        throw new Error("Firebase Admin not configured. Add FIREBASE_SERVICE_ACCOUNT_JSON to Railway variables.");
+      }
+
       if (!title || !message) {
         throw new Error("Missing title or message");
       }
+      
       const savedNotification = await createNotificationRecord({
         title,
         message,
@@ -1850,27 +1889,53 @@ const server = createServer(async (request, response) => {
         startsAt,
         endsAt,
         active,
-        targetCustomerId: customerId === "ALL" ? "" : customerId
+        targetCustomerId: customerId === "ALL" ? "" : (customerId || "")
       });
       
-      let tokens = {};
-      if (existsSync(tokensPath)) {
-        tokens = JSON.parse(readFileSync(tokensPath, "utf8"));
-      }
+      const fileTokens = readTokens();
       let databaseTokens = [];
       try {
-        ensureDatabaseAvailable();
-        const result = await dbPool.query(`
-          SELECT token
-          FROM device_tokens
-          ORDER BY updated_at DESC
-        `);
-        databaseTokens = result.rows.map(row => String(row.token || "").trim()).filter(Boolean);
+        if (dbPool) {
+          const result = await dbPool.query("SELECT token, firebase_uid, phone FROM device_tokens");
+          databaseTokens = result.rows;
+        }
       } catch (error) {
         console.warn("Could not load device tokens from PostgreSQL:", error.message);
       }
       
-      const messages = [];
+      // Target matching
+      const targetTokens = new Set();
+      
+      // 1. Process file tokens
+      for (const cid in fileTokens) {
+        const entry = fileTokens[cid];
+        const token = typeof entry === "string" ? entry : entry.token;
+        const entryFirebaseUid = typeof entry === "object" ? entry.firebaseUid : null;
+        const entryPhone = typeof entry === "object" ? entry.phone : null;
+
+        let match = (customerId === "ALL");
+        if (!match && customerId && String(cid) === String(customerId)) match = true;
+        if (!match && firebaseUid && entryFirebaseUid === firebaseUid) match = true;
+        if (!match && phone && normalizePhone(entryPhone) === normalizePhone(phone)) match = true;
+        
+        if (match && token) targetTokens.add(token);
+      }
+      
+      // 2. Process database tokens
+      for (const row of databaseTokens) {
+        let match = (customerId === "ALL");
+        if (!match && customerId && String(row.customerId) === String(customerId)) match = true; // Hypothetical if we add customerId to DB
+        if (!match && firebaseUid && row.firebase_uid === firebaseUid) match = true;
+        if (!match && phone && normalizePhone(row.phone) === normalizePhone(phone)) match = true;
+        // If orderId provided, we could lookup order customer but keep it simple for now
+        
+        if (match && row.token) targetTokens.add(row.token);
+      }
+
+      if (targetTokens.size === 0) {
+        throw new Error("No devices subscribed. Open app on phone and allow notifications.");
+      }
+
       const notificationObj = { title, body: message };
       if (imageUrl) notificationObj.image = imageUrl;
 
@@ -1880,6 +1945,7 @@ const server = createServer(async (request, response) => {
         } 
       };
       if (imageUrl) androidObj.notification.imageUrl = imageUrl;
+      
       const data = {
         notificationId: String(savedNotification.id),
         linkedProductId: savedNotification.linkedProductId || "",
@@ -1887,30 +1953,26 @@ const server = createServer(async (request, response) => {
         ctaText: savedNotification.ctaText || ""
       };
 
-      if (customerId === "ALL") {
-        [...new Set([...Object.values(tokens), ...databaseTokens])].forEach(token => {
-          messages.push({ token, notification: notificationObj, android: androidObj, data });
-        });
-      } else if (customerId && tokens[customerId]) {
-        messages.push({ token: tokens[customerId], notification: notificationObj, android: androidObj, data });
-      } else {
-        throw new Error("No tokens found for target customer: " + customerId);
-      }
-
-      if (messages.length === 0) {
-        throw new Error("No users are currently subscribed to notifications (tokens list is empty). Please open the app and allow notifications first.");
-      }
-      if (!admin.messaging) {
-        throw new Error("Firebase Admin is not initialized. Check serviceAccountKey.json.");
-      }
+      const messages = Array.from(targetTokens).map(token => ({
+        token,
+        notification: notificationObj,
+        android: androidObj,
+        data
+      }));
 
       const batchResponse = await admin.messaging().sendEach(messages);
-      sendJson(response, 200, { success: true, count: batchResponse.successCount, notification: savedNotification });
+      sendJson(response, 200, { 
+        success: true, 
+        count: batchResponse.successCount, 
+        failureCount: batchResponse.failureCount,
+        notification: savedNotification 
+      });
     } catch (e) {
       sendJson(response, 500, { error: e.message });
     }
     return;
   }
+
 
   if (url.pathname === "/api/notifications" && request.method === "GET") {
     try {

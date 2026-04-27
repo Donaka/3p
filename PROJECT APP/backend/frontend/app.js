@@ -6,7 +6,9 @@ import {
   signOut
 } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-auth.js";
 
+const FCM_VAPID_KEY = "Z02lSpdHObXSkAYQOqbEVPF3qO40B7PkzieHdNsYG9k";
 const shopWhatsAppNumber = "212688943959";
+
 const defaultShopSettings = {
   shopLatitude: 30.4017949,
   shopLongitude: -9.5510469,
@@ -379,6 +381,10 @@ const recaptchaFallback = document.querySelector("#recaptchaFallback");
 const locationGate = document.querySelector("#locationGate");
 const locationGateMessage = document.querySelector("#locationGateMessage");
 const allowLocationButton = document.querySelector("#allowLocationButton");
+const pushGate = document.querySelector("#pushGate");
+const allowNotificationsButton = document.querySelector("#allowNotificationsButton");
+const skipNotificationsButton = document.querySelector("#skipNotificationsButton");
+
 const customerName = document.querySelector("#customerName");
 const customerPhoneInput = document.querySelector("#customerPhone");
 const promoCodeInput = document.querySelector("#promoCode");
@@ -853,6 +859,15 @@ function hideLocationGate() {
   locationGateActive = false;
   locationGate?.classList.add("hidden");
 }
+
+function showPushGate() {
+  pushGate?.classList.remove("hidden");
+}
+
+function hidePushGate() {
+  pushGate?.classList.add("hidden");
+}
+
 
 function normalizeMoroccoPhone(input) {
   const raw = String(input || "").trim().replace(/\s+/g, "");
@@ -1702,11 +1717,13 @@ let pushMessaging = null;
 async function syncDeviceToken(token) {
   if (!token) return;
   const payload = {
+    customerId: getCustomerId(),
     firebaseUid: state.customer?.uid || "",
     phone: getActiveCustomerPhone(),
     platform: "web",
     token
   };
+
   console.info("[push] device token", token);
   try {
     await fetch("/api/device-token", {
@@ -1721,7 +1738,7 @@ async function syncDeviceToken(token) {
     await fetch("/api/tokens", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ customerId: getCustomerId(), token })
+      body: JSON.stringify(payload)
     });
   } catch (error) {
     console.warn("Failed to sync legacy push token", error);
@@ -1941,7 +1958,12 @@ async function initializeMessaging() {
     webMessagingInitialized = true;
   }
   try {
-    const token = await getToken(messaging);
+    const serviceWorkerRegistration = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+    const token = await getToken(messaging, {
+      vapidKey: FCM_VAPID_KEY,
+      serviceWorkerRegistration
+    });
+
     if (token) await syncDeviceToken(token);
   } catch (error) {
     console.warn("Failed to refresh token:", error);
@@ -1974,8 +1996,9 @@ async function initFirebaseAuth() {
           setCustomerSession(customer);
           const locationReady = await resolveLocationGate();
           if (locationReady) {
-            switchView("home");
+            showPushGate();
           }
+
         } else {
           hideLocationGate();
           finalizeCustomerBootstrap(null);
@@ -3079,7 +3102,8 @@ allowLocationButton?.addEventListener("click", async () => {
     hideLocationGate();
     await upsertCustomerProfile();
     finalizeCustomerBootstrap(state.customer);
-    switchView("home");
+    showPushGate();
+
   } catch (error) {
     console.warn("Required location request failed", error);
     showLocationGate("La localisation est requise pour continuer.");
@@ -3088,6 +3112,27 @@ allowLocationButton?.addEventListener("click", async () => {
     allowLocationButton.removeAttribute("disabled");
   }
 });
+allowNotificationsButton?.addEventListener("click", async () => {
+  allowNotificationsButton.setAttribute("disabled", "true");
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission === "granted") {
+      await initializeMessaging();
+    }
+  } catch (error) {
+    console.error("Push permission error:", error);
+  } finally {
+    hidePushGate();
+    switchView("home");
+    allowNotificationsButton.removeAttribute("disabled");
+  }
+});
+
+skipNotificationsButton?.addEventListener("click", () => {
+  hidePushGate();
+  switchView("home");
+});
+
 closeOptions?.addEventListener("click", closeOptionsModal);
 optionsModal?.addEventListener("click", event => {
   if (event.target === optionsModal) closeOptionsModal();
