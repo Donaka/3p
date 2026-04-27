@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3P Admin - Dashboard Premium</title>
+    <link rel="stylesheet" href="admin.css">
+    <link rel="icon" href="icon.svg">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="dark-mode">
+    <div id="login-screen" class="screen active">
+        <div class="login-card">
+            <img src="logo-3p.png" alt="3P Logo" class="login-logo">
+            <h1>Administration 3P</h1>
+            <div class="input-group">
+                <input type="password" id="admin-password" placeholder="Mot de passe admin">
+            </div>
+            <button id="login-btn">Se connecter</button>
+        </div>
+    </div>
+
+    <div id="main-screen" class="screen">
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <img src="logo-3p.png" alt="3P Logo" class="nav-logo">
+                <span>3P Chicken Pops</span>
+            </div>
+            <ul class="nav-links">
+                <li data-tab="dashboard" class="active">Tableau de bord</li>
+                <li data-tab="orders">Commandes</li>
+                <li data-tab="menu">Menu & Produits</li>
+                <li data-tab="settings">Paramètres</li>
+                <li data-tab="push">Notifications</li>
+            </ul>
+            <div class="sidebar-footer">
+                <button id="logout-btn">Déconnexion</button>
+            </div>
+        </nav>
+
+        <main class="content">
+            <!-- Dashboard Tab -->
+            <section id="dashboard-tab" class="tab-content active">
+                <header class="tab-header">
+                    <h2>Tableau de bord</h2>
+                    <div id="store-status-badge" class="badge">Chargement...</div>
+                </header>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3>Commandes (Aujourd'hui)</h3>
+                        <p id="stat-orders-today">0</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Chiffre d'affaires</h3>
+                        <p id="stat-revenue">0 MAD</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Commandes en attente</h3>
+                        <p id="stat-pending">0</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Appareils enregistrés</h3>
+                        <p id="stat-devices">0</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Orders Tab -->
+            <section id="orders-tab" class="tab-content">
+                <header class="tab-header">
+                    <h2>Gestion des Commandes</h2>
+                    <div class="filters">
+                        <select id="order-status-filter">
+                            <option value="">Tous les statuts</option>
+                            <option value="new">Nouvelles</option>
+                            <option value="accepted">Acceptées</option>
+                            <option value="preparing">En préparation</option>
+                            <option value="ready">Prêtes</option>
+                            <option value="delivered">Livrées</option>
+                            <option value="cancelled">Annulées</option>
+                        </select>
+                    </div>
+                </header>
+                <div class="table-container">
+                    <table id="orders-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Client</th>
+                                <th>Mode</th>
+                                <th>Total</th>
+                                <th>Statut</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Menu Tab -->
+            <section id="menu-tab" class="tab-content">
+                <header class="tab-header">
+                    <h2>Menu & Produits</h2>
+                    <div class="header-actions">
+                        <button class="btn-primary" onclick="admin.showAddCategoryModal()">+ Catégorie</button>
+                        <button class="btn-primary" onclick="admin.showAddProductModal()">+ Produit</button>
+                    </div>
+                </header>
+                <div class="menu-manager">
+                    <div class="categories-list" id="categories-container"></div>
+                    <div class="products-list" id="products-container"></div>
+                </div>
+            </section>
+
+            <!-- Settings Tab -->
+            <section id="settings-tab" class="tab-content">
+                <header class="tab-header">
+                    <h2>Paramètres du Restaurant</h2>
+                </header>
+                <form id="settings-form" class="admin-form">
+                    <div class="form-section">
+                        <h3>Disponibilité</h3>
+                        <div class="form-row">
+                            <label>Boutique Ouverte</label>
+                            <input type="checkbox" id="setting-is-open">
+                        </div>
+                        <div class="form-row">
+                            <label>Message de fermeture</label>
+                            <textarea id="setting-closed-message"></textarea>
+                        </div>
+                    </div>
+                    <div class="form-section">
+                        <h3>Contact & Livraison</h3>
+                        <div class="form-row">
+                            <label>WhatsApp Boutique</label>
+                            <input type="text" id="setting-whatsapp">
+                        </div>
+                        <div class="form-row">
+                            <label>Latitude</label>
+                            <input type="number" step="any" id="setting-lat">
+                        </div>
+                        <div class="form-row">
+                            <label>Longitude</label>
+                            <input type="number" step="any" id="setting-lng">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn-save">Enregistrer les paramètres</button>
+                </form>
+            </section>
+
+            <!-- Push Tab -->
+            <section id="push-tab" class="tab-content">
+                <header class="tab-header">
+                    <h2>Notifications Push</h2>
+                    <p id="push-device-count">0 appareils prêts à recevoir</p>
+                </header>
+                <form id="push-form" class="admin-form">
+                    <div class="form-row">
+                        <label>Titre</label>
+                        <input type="text" id="push-title" placeholder="Ex: Promotion Flash !">
+                    </div>
+                    <div class="form-row">
+                        <label>Message</label>
+                        <textarea id="push-body" placeholder="Ex: -50% sur les Pops aujourd'hui..."></textarea>
+                    </div>
+                    <div class="form-row">
+                        <label>Cible</label>
+                        <select id="push-target">
+                            <option value="ALL">Tous les appareils</option>
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <label>Action au clic (Optionnel)</label>
+                        <select id="push-type">
+                            <option value="home">Accueil</option>
+                            <option value="product">Produit spécifique</option>
+                            <option value="category">Catégorie spécifique</option>
+                            <option value="order">Commande spécifique</option>
+                        </select>
+                    </div>
+                    <div id="push-id-field" class="form-row hidden">
+                        <label>ID (Produit/Cat/Order)</label>
+                        <input type="text" id="push-link-id">
+                    </div>
+                    <button type="submit" class="btn-push">🚀 Envoyer la notification</button>
+                </form>
+                <div id="push-result" class="push-result hidden"></div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div id="modal-overlay" class="modal-overlay">
+        <div class="modal">
+            <header class="modal-header">
+                <h3 id="modal-title">Modal Title</h3>
+                <button class="close-modal">&times;</button>
+            </header>
+            <div class="modal-body" id="modal-body"></div>
+        </div>
+    </div>
+
+    <script src="admin.js"></script>
+</body>
+</html>

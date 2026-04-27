@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>3P CHICKEN POPS</title>
+    <meta name="theme-color" content="#050505">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="3P CHICKEN POPS">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" sizes="192x192" href="pwa-icon-192.png">
+    <link rel="apple-touch-icon" href="pwa-icon-192.png">
+    <link rel="preload" as="image" href="loading-logo-fire.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="phone-shell" aria-label="Shop ordering app">
+      <section class="splash-screen" id="splashScreen" aria-label="Loading 3P menu">
+        <div class="splash-poster">
+          <img src="loading-logo-fire.png" alt="3P fire logo">
+          <span class="ember ember-one"></span>
+          <span class="ember ember-two"></span>
+          <span class="ember ember-three"></span>
+          <span class="ember ember-four"></span>
+        </div>
+        <p>3P CHICKEN POPS</p>
+        <div class="loader-bar loader-fire"><span></span></div>
+        <div class="loader-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+      </section>
+
+      <section class="language-screen hidden" id="languageScreen" aria-label="Choose language">
+        <div class="language-card">
+          <img src="logo-3p.png" alt="3P logo">
+          <p>Welcome</p>
+          <h1>Choose your language</h1>
+          <div class="language-actions">
+            <button data-language="en" type="button">English</button>
+            <button data-language="fr" type="button">Francais</button>
+            <button data-language="ar" type="button">العربية</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="location-gate hidden" id="locationGate" aria-label="Location permission required">
+        <div class="location-gate-card">
+          <p>Localisation</p>
+          <h1>Autoriser la localisation</h1>
+          <span id="locationGateMessage">Cela nous aide a confirmer votre commande.</span>
+          <button class="auth-submit" id="allowLocationButton" type="button">Autoriser</button>
+        </div>
+      </section>
+
+      <section class="location-gate hidden" id="pushGate" aria-label="Notification permission required">
+        <div class="location-gate-card">
+          <p>Notifications</p>
+          <h1>Activer les notifications</h1>
+          <span id="pushGateMessage">Restez informe de l'etat de votre commande en temps reel.</span>
+          <button class="auth-submit" id="allowNotificationsButton" type="button">Activer les notifications</button>
+          <button class="auth-submit auth-submit-secondary" id="skipNotificationsButton" type="button">Plus tard</button>
+        </div>
+      </section>
+
+
+      <section class="screen" id="screen">
+        <header class="topbar">
+          <button class="icon-button" id="supportMenuButton" aria-label="Support menu">
+            <span></span><span></span><span></span>
+          </button>
+          <div class="location">
+            <small data-i18n="brandLabel">3P CHICKEN POPS</small>
+            <strong data-i18n="orderForDelivery">Order for delivery</strong>
+          </div>
+          <div class="topbar-actions">
+            <button class="icon-button notification-button" id="notificationButton" aria-label="Notifications">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+                <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
+              </svg>
+              <span class="notification-badge" id="notificationBadge" style="display: none;">0</span>
+            </button>
+            <button class="icon-button account-button no-photo" id="accountTabButton" aria-label="Open account">
+              <img id="accountTabAvatarImage" alt="Account avatar">
+              <span id="accountTabAvatarFallback">A</span>
+            </button>
+          </div>
+        </header>
+
+        <div class="app-view active" id="homeView" data-view="home">
+          <section class="store-banner hidden" id="homeStoreBanner">
+            <strong>Magasin ferme</strong>
+            <span id="homeStoreBannerText">Desole, nous sommes fermes actuellement. Vous pouvez consulter le menu et revenir plus tard.</span>
+          </section>
+          <section class="hero" id="hero">
+            <div class="hero-backdrop" id="heroBackdrop" aria-hidden="true"></div>
+            <div class="hero-dots" id="heroDots" aria-hidden="true"></div>
+          </section>
+
+          <section class="service-row" aria-label="Service information">
+            <div>
+              <strong>25-35</strong>
+              <span>min</span>
+            </div>
+            <div>
+              <strong>4.8</strong>
+              <span data-i18n="rating">rating</span>
+            </div>
+            <div id="hoursStatusCard">
+              <strong id="hoursStatus" data-i18n="open">Open</strong>
+              <span id="hoursStatusDetail" data-i18n="hours">11AM - 3AM</span>
+            </div>
+          </section>
+
+          <section class="home-quick-actions">
+            <button class="home-action-card" id="homeBrowseAction" type="button">
+              <strong>Explorer le menu</strong>
+              <span>Categories, recherche, produits</span>
+            </button>
+            <button class="home-action-card" id="homeOrdersAction" type="button">
+              <strong>Suivre mes commandes</strong>
+              <span>Historique local rapide</span>
+            </button>
+          </section>
+
+          <section class="section-title">
+            <div>
+              <p id="homeResultsMeta">Popular now</p>
+              <h2 id="homeSectionHeading">Featured picks</h2>
+            </div>
+            <button id="homeShowAll" type="button">Explorer</button>
+          </section>
+
+          <section class="products" id="featuredProducts" aria-live="polite"></section>
+        </div>
+
+        <div class="app-view" id="explorerView" data-view="explorer">
+          <section class="store-banner hidden" id="explorerStoreBanner">
+            <strong>Magasin ferme</strong>
+            <span id="explorerStoreBannerText">Desole, nous sommes fermes actuellement. Vous pouvez consulter le menu et revenir plus tard.</span>
+          </section>
+          <section class="search-row">
+            <label class="search-box">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M10.8 18.1a7.3 7.3 0 1 1 5.1-2.1l4 4-1.5 1.5-4-4a7.1 7.1 0 0 1-3.6.6Zm0-2.1a5.2 5.2 0 1 0 0-10.4 5.2 5.2 0 0 0 0 10.4Z"/>
+              </svg>
+              <input id="searchInput" type="search" placeholder="Search menu, products, categories" data-i18n-placeholder="searchPlaceholder">
+            </label>
+            <button class="filter-button" id="clearFilters" aria-label="Clear filters">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 6.5h16v2H4v-2Zm3 4.5h10v2H7v-2Zm3 4.5h4v2h-4v-2Z"/>
+              </svg>
+            </button>
+          </section>
+
+          <nav class="tabs" aria-label="Order mode">
+            <button class="tab active" data-mode="delivery" data-i18n="delivery">Delivery</button>
+            <button class="tab" data-mode="pickup" data-i18n="pickup">Pickup</button>
+          </nav>
+
+          <section class="category-strip" aria-label="Categories" id="categories"></section>
+
+          <section class="section-title">
+            <div>
+              <p id="resultsMeta">6 categories</p>
+              <h2 id="sectionHeading">Popular products</h2>
+            </div>
+            <button id="showAll" data-i18n="all" type="button">All</button>
+          </section>
+
+          <section class="products" id="products" aria-live="polite"></section>
+        </div>
+
+        <div class="app-view" id="ordersView" data-view="orders">
+          <section class="view-sheet">
+            <div class="section-title section-title-tight">
+              <div>
+                <p>Commandes</p>
+                <h2>Historique</h2>
+              </div>
+              <button class="location-button refresh-orders-button" id="refreshOrdersButton" type="button">Actualiser</button>
+            </div>
+            <div class="orders-list" id="ordersList"></div>
+          </section>
+        </div>
+
+        <div class="app-view" id="accountView" data-view="account">
+          <section class="view-sheet account-page">
+            <div class="section-title section-title-tight">
+              <div>
+                <p>Compte</p>
+                <h2>Mon profil</h2>
+              </div>
+            </div>
+
+            <div class="account-summary-card">
+              <div class="account-summary-avatar no-photo" id="accountPageAvatar">
+                <img id="accountPageAvatarImage" alt="Account avatar">
+                <span id="accountPageAvatarFallback">C</span>
+              </div>
+              <div class="account-summary-copy">
+                <p id="accountStatus">Connectez-vous pour suivre vos commandes</p>
+                <h3 id="accountName">Compte client</h3>
+                <small id="accountHelp">Connectez-vous avec votre numero pour retrouver vos commandes.</small>
+              </div>
+            </div>
+
+            <div class="account-login-state" id="accountLoggedOutState">
+              <div class="phone-login-form-shell">
+                <div class="auth-heading">
+                  <p>3P CHICKEN POPS</p>
+                  <h2>Connexion</h2>
+                  <span>Entrez votre numero pour suivre vos commandes</span>
+                </div>
+              <form class="phone-login-form" id="phoneLoginForm">
+                <label class="auth-field">
+                  <span>Numero de telephone</span>
+                  <input id="loginPhone" name="loginPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+212 6 00 00 00 00" required>
+                  <small class="auth-helper">Maroc: 06, 07 ou +212</small>
+                </label>
+                <label class="auth-field">
+                  <span>Nom (si c'est votre premiere visite)</span>
+                  <input id="loginName" name="loginName" type="text" autocomplete="name" placeholder="Votre nom">
+                </label>
+                <div class="otp-step hidden" id="otpFieldWrap">
+                  <div class="otp-step-head">
+                    <span>Code SMS</span>
+                    <small id="otpSentPreview">Code envoye a votre numero.</small>
+                  </div>
+                  <input id="otpCode" name="otpCode" type="text" class="otp-hidden-input" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" placeholder="123456">
+                  <div class="otp-boxes" id="otpBoxes" aria-label="Code OTP">
+                    <button class="otp-box" type="button" data-otp-index="0">•</button>
+                    <button class="otp-box" type="button" data-otp-index="1">•</button>
+                    <button class="otp-box" type="button" data-otp-index="2">•</button>
+                    <button class="otp-box" type="button" data-otp-index="3">•</button>
+                    <button class="otp-box" type="button" data-otp-index="4">•</button>
+                    <button class="otp-box" type="button" data-otp-index="5">•</button>
+                  </div>
+                  <div class="otp-meta">
+                    <button class="otp-link" id="editPhoneButton" type="button">Modifier le numero</button>
+                    <button class="otp-link" id="resendCodeButton" type="button" disabled>Renvoyer le code <span id="resendCountdown">30s</span></button>
+                  </div>
+                </div>
+                <p class="login-error hidden" id="accountLoginError" role="status" aria-live="polite"></p>
+                <div class="phone-login-actions">
+                  <button class="auth-submit" id="phoneLoginButton" type="submit">Envoyer le code</button>
+                  <button class="auth-submit auth-submit-secondary hidden" id="verifyCodeButton" type="button" disabled>Verifier</button>
+                </div>
+                <div id="recaptchaContainer" class="recaptcha-container hidden"></div>
+                <div id="recaptchaFallback" class="recaptcha-container hidden"></div>
+                <button class="auth-support-link" id="otpSupportButton" type="button">Probleme de code ? Contacter WhatsApp</button>
+              </form>
+              </div>
+            </div>
+
+            <div class="account-login-state hidden" id="accountLoggedInState">
+              <button class="signout-button" id="customerLogout" type="button">Se deconnecter</button>
+              <div class="account-links">
+                <button class="account-link-row" id="accountOrdersLink" type="button">
+                  <span class="account-link-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none"><path d="M6 5h12a1 1 0 0 1 1 1v12l-3-2-3 2-3-2-3 2V6a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 9.5h6M9 12.5h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                  </span>
+                  <span class="account-link-copy">
+                    <strong>Historique des commandes</strong>
+                    <small>Voir les commandes recentes</small>
+                  </span>
+                  <span class="account-link-arrow" aria-hidden="true">›</span>
+                </button>
+                <button class="account-link-row" id="accountLanguageLink" type="button">
+                  <span class="account-link-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h10M9 4c0 5-2 9-5 12M7 10c1.5 2.2 3.2 4 5 5.5M14 7h6M17 7v13M14.5 15h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </span>
+                  <span class="account-link-copy">
+                    <strong>Langue</strong>
+                    <small>Changer la langue de l'application</small>
+                  </span>
+                  <span class="account-link-arrow" aria-hidden="true">›</span>
+                </button>
+                <button class="account-link-row" id="accountHelpLink" type="button">
+                  <span class="account-link-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" stroke="currentColor" stroke-width="1.8"/><path d="M9.4 9.2a2.8 2.8 0 1 1 4.7 2c-.7.6-1.4 1-1.4 2v.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="17.1" r="1" fill="currentColor"/></svg>
+                  </span>
+                  <span class="account-link-copy">
+                    <strong>Aide</strong>
+                    <small>Support et contact manager</small>
+                  </span>
+                  <span class="account-link-arrow" aria-hidden="true">›</span>
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <nav class="bottom-nav" id="bottomNav" aria-label="Main navigation">
+        <button class="bottom-nav-item active" type="button" data-view-target="home">
+          <span class="bottom-nav-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 12.5 12 5l8 7.5v6.5a1 1 0 0 1-1 1h-4.5v-5h-5v5H5a1 1 0 0 1-1-1z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          </span>
+          <strong>Accueil</strong>
+        </button>
+        <button class="bottom-nav-item" type="button" data-view-target="explorer">
+          <span class="bottom-nav-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M10.8 18.1a7.3 7.3 0 1 1 5.1-2.1l4 4-1.5 1.5-4-4a7.1 7.1 0 0 1-3.6.6Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M10.8 15.9a5.1 5.1 0 1 0 0-10.2 5.1 5.1 0 0 0 0 10.2Z" stroke="currentColor" stroke-width="1.8"/></svg>
+          </span>
+          <strong>Explorer</strong>
+        </button>
+        <button class="bottom-nav-item" type="button" data-view-target="orders">
+          <span class="bottom-nav-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M6 5h12a1 1 0 0 1 1 1v12l-3-2-3 2-3-2-3 2V6a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 9.5h6M9 12.5h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </span>
+          <strong>Commandes</strong>
+        </button>
+        <button class="bottom-nav-item" type="button" data-view-target="account">
+          <span class="bottom-nav-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 12a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="1.8"/><path d="M5 19c1.8-2.8 4.1-4 7-4s5.2 1.2 7 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </span>
+          <strong>Compte</strong>
+        </button>
+      </nav>
+
+      <aside class="cart-panel" id="cartPanel" aria-label="Cart">
+        <div class="cart-handle"></div>
+        <header>
+          <div>
+            <p data-i18n="yourBasket">Your basket</p>
+            <h2 id="cartTitle">0 items</h2>
+          </div>
+          <button class="icon-button close-button" id="closeCart" aria-label="Close cart">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m12 10.6 4.9-4.9 1.4 1.4-4.9 4.9 4.9 4.9-1.4 1.4-4.9-4.9-4.9 4.9-1.4-1.4 4.9-4.9-4.9-4.9 1.4-1.4 4.9 4.9Z"/>
+            </svg>
+          </button>
+        </header>
+        <div class="cart-items" id="cartItems"></div>
+        <div class="checkout-card">
+          <div class="summary-line">
+            <span data-i18n="subtotal">Subtotal</span>
+            <strong id="subtotal">0 DHS</strong>
+          </div>
+          <div class="summary-line">
+            <span id="serviceLabel">Delivery</span>
+            <strong id="serviceFee">0 DHS</strong>
+          </div>
+          <div class="summary-line promo-line hidden" id="promoSummary">
+            <span id="promoLabel">Promo</span>
+            <strong id="promoDiscount">-0 DHS</strong>
+          </div>
+          <div class="summary-line total">
+            <span data-i18n="total">Total</span>
+            <strong id="total">0 DHS</strong>
+          </div>
+          <button class="checkout-button" id="checkoutButton" data-i18n="checkout">Checkout</button>
+        </div>
+      </aside>
+
+      <section class="checkout-modal" id="checkoutModal" aria-label="Checkout details" aria-hidden="true">
+        <div class="modal-card">
+          <header>
+            <div>
+              <p data-i18n="checkout">Checkout</p>
+              <h2 data-i18n="customerDetails">Customer details</h2>
+            </div>
+            <button class="icon-button close-button" id="closeCheckout" aria-label="Close checkout">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m12 10.6 4.9-4.9 1.4 1.4-4.9 4.9 4.9 4.9-1.4 1.4-4.9-4.9-4.9 4.9-1.4-1.4 4.9-4.9-4.9-4.9 1.4-1.4 4.9 4.9Z"/>
+              </svg>
+            </button>
+          </header>
+          <form class="checkout-form" id="checkoutForm">
+            <label>
+              <span data-i18n="name">Name</span>
+              <input id="customerName" name="customerName" autocomplete="name" required placeholder="Your full name" data-i18n-placeholder="namePlaceholder">
+            </label>
+            <label>
+              <span data-i18n="phone">Phone</span>
+              <input id="customerPhone" name="customerPhone" autocomplete="tel" required placeholder="+212 600 000 000">
+            </label>
+            <label id="addressField">
+              <span data-i18n="deliveryAddress">Delivery address</span>
+              <textarea id="customerAddress" name="customerAddress" rows="3" placeholder="Street, building, city" data-i18n-placeholder="addressPlaceholder"></textarea>
+            </label>
+            <div class="location-capture" id="locationCapture">
+              <button class="location-button" id="useLocationButton" type="button" data-i18n="useExactLocation">Use exact location</button>
+              <p id="locationStatus" data-i18n="locationNotAdded">Location not added yet.</p>
+            </div>
+            <label>
+              <span data-i18n="payment">Payment</span>
+              <select id="paymentMethod" name="paymentMethod">
+                <option data-i18n="cashOnDelivery">Cash on delivery</option>
+              </select>
+            </label>
+            <label>
+              <span>Promo code</span>
+              <div class="promo-entry">
+                <input id="promoCode" name="promoCode" autocomplete="off" placeholder="WELCOME10">
+                <button id="applyPromo" type="button">Apply</button>
+              </div>
+              <small id="promoStatus">Enter a promo code if you have one.</small>
+            </label>
+            <label>
+              <span data-i18n="notes">Notes</span>
+              <textarea id="orderNotes" name="orderNotes" rows="2" placeholder="Delivery time, substitutions, special request" data-i18n-placeholder="notesPlaceholder"></textarea>
+            </label>
+            <button class="checkout-button" type="submit" data-i18n="sendWhatsapp">Send order on WhatsApp</button>
+          </form>
+          <div class="checkout-success hidden" id="checkoutSuccess" aria-live="polite">
+            <div class="success-check" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="m9.8 16.4-3.6-3.6 1.4-1.4 2.2 2.2 6.6-6.6 1.4 1.4-8 8Z"/>
+              </svg>
+            </div>
+            <div class="checkout-success-copy">
+              <p>Commande envoyee ✅</p>
+              <h2>Merci ! Votre commande a ete envoyee sur WhatsApp. Nous allons vous contacter pour confirmer.</h2>
+            </div>
+            <div class="checkout-success-meta">
+              <div class="success-stat">
+                <span>Numero de commande</span>
+                <strong id="successOrderNumber">-</strong>
+              </div>
+              <div class="success-stat">
+                <span>Total</span>
+                <strong id="successOrderTotal">-</strong>
+              </div>
+              <div class="success-stat">
+                <span>Mode</span>
+                <strong id="successOrderMode">-</strong>
+              </div>
+            </div>
+            <div class="success-actions">
+              <button class="admin-secondary checkout-secondary" id="successBackHome" type="button">Retour a l'accueil</button>
+              <button class="checkout-button" id="successViewOrders" type="button">Voir mes commandes</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="options-modal" id="optionsModal" aria-label="Choose product option" aria-hidden="true">
+        <div class="options-card">
+          <header class="options-header">
+            <button class="icon-button close-button" id="closeOptions" aria-label="Close options">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m12 10.6 4.9-4.9 1.4 1.4-4.9 4.9 4.9 4.9-1.4 1.4-4.9-4.9-4.9 4.9-1.4-1.4 4.9-4.9-4.9-4.9 1.4-1.4 4.9 4.9Z"/>
+              </svg>
+            </button>
+          </header>
+          <div class="options-hero">
+            <div class="options-hero-fallback" id="optionsHeroFallback" aria-hidden="true">3P</div>
+            <img id="optionsImage" src="" alt="">
+          </div>
+          <div class="options-summary">
+            <div class="options-summary-top">
+              <div>
+                <p id="optionsSubtitle">3P CHICKEN POPS</p>
+                <h2 id="optionsTitle">Choose option</h2>
+              </div>
+              <strong id="optionsPrice">0 DHS</strong>
+            </div>
+            <p class="options-description" id="optionsDescription"></p>
+          </div>
+          <div class="options-choices" id="optionsChoices"></div>
+          <p class="options-error" id="optionsError" aria-live="polite"></p>
+          <button class="checkout-button option-submit-button" id="addOptionProduct" type="button">Add to basket</button>
+        </div>
+      </section>
+
+      <section class="notification-modal" id="notificationModal" aria-label="Notifications" aria-hidden="true">
+        <div class="notification-card">
+          <header>
+            <div>
+              <p>Updates & Offers</p>
+              <h2>Notifications</h2>
+            </div>
+            <button class="icon-button close-button" id="closeNotifications" aria-label="Close notifications">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m12 10.6 4.9-4.9 1.4 1.4-4.9 4.9 4.9 4.9-1.4 1.4-4.9-4.9-4.9 4.9-1.4-1.4 4.9-4.9-4.9-4.9 1.4-1.4 4.9 4.9Z"/>
+              </svg>
+            </button>
+          </header>
+          <div class="notification-list" id="notificationList"></div>
+        </div>
+      </section>
+
+      <section class="order-details-modal" id="orderDetailsModal" aria-label="Order details" aria-hidden="true">
+        <div class="order-details-card">
+          <header>
+            <div>
+              <p>Commande</p>
+              <h2 id="orderDetailsTitle">Details de commande</h2>
+            </div>
+            <button class="icon-button close-button" id="closeOrderDetails" aria-label="Close order details">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m12 10.6 4.9-4.9 1.4 1.4-4.9 4.9 4.9 4.9-1.4 1.4-4.9-4.9-4.9 4.9-1.4-1.4 4.9-4.9-4.9-4.9 1.4-1.4 4.9 4.9Z"/>
+              </svg>
+            </button>
+          </header>
+          <div class="order-details-body" id="orderDetailsBody"></div>
+          <div class="order-details-actions">
+            <button class="admin-secondary checkout-secondary" id="orderDetailsClose" type="button">Fermer</button>
+            <button class="admin-secondary" id="orderDetailsWhatsapp" type="button">WhatsApp</button>
+            <button class="checkout-button" id="orderDetailsReorder" type="button">Commander a nouveau</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="support-modal" id="supportModal" aria-label="Support and app information" aria-hidden="true">
+        <div class="support-card">
+          <header>
+            <div>
+              <p>3P CHICKEN POPS</p>
+              <h2>Support</h2>
+            </div>
+            <button class="icon-button close-button" id="closeSupport" aria-label="Close support menu">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m12 10.6 4.9-4.9 1.4 1.4-4.9 4.9 4.9 4.9-1.4 1.4-4.9-4.9-4.9 4.9-1.4-1.4 4.9-4.9-4.9-4.9 1.4-1.4 4.9 4.9Z"/>
+              </svg>
+            </button>
+          </header>
+          <a class="support-action call-manager" href="tel:+212688943959">
+            <span>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6.6 10.8c1.6 3.1 3.5 5 6.6 6.6l2.2-2.2c.3-.3.8-.4 1.2-.3 1.3.4 2.6.6 4 .6.7 0 1.2.5 1.2 1.2v3.5c0 .7-.5 1.2-1.2 1.2C10.6 21.4 2.6 13.4 2.6 3.4c0-.7.5-1.2 1.2-1.2h3.5c.7 0 1.2.5 1.2 1.2 0 1.4.2 2.7.6 4 .1.4 0 .9-.3 1.2l-2.2 2.2Z"/>
+              </svg>
+            </span>
+            <div>
+              <strong>Call manager</strong>
+              <small>+212 688 943 959</small>
+            </div>
+          </a>
+          <div class="about-app">
+            <span>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M11 17h2v-6h-2v6Zm0-8h2V7h-2v2Zm1 13a10 10 0 1 1 0-20 10 10 0 0 1 0 20Z"/>
+              </svg>
+            </span>
+            <div>
+              <strong>About app</strong>
+              <small>Official ordering app for 3P CHICKEN POPS. Browse the menu, share your delivery location, and send your order directly on WhatsApp.</small>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <button class="floating-cart" id="openCart" aria-label="Open cart">
+        <span id="cartCount">0</span>
+        <div>
+          <small data-i18n="viewBasket">View basket</small>
+          <strong id="cartTotal">0 DHS</strong>
+        </div>
+      </button>
+
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
