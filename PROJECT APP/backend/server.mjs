@@ -204,6 +204,8 @@ async function ensureDatabase() {
         `);
         await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ;`);
         await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS ready_at TIMESTAMPTZ;`);
+        await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS accepted_until TIMESTAMPTZ;`);
+        await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS preparing_until TIMESTAMPTZ;`);
         await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS estimated_delivery_minutes INTEGER;`);
         await client.query(`ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;`);
         await client.query(`
@@ -539,7 +541,7 @@ function mapNotificationRow(row) {
 function getEstimatedTime(order, activeOrders = 0, preparationTimeBase = fallbackSettings.preparationTimeBase) {
   if (order.status === "delivered") return "Livree";
   if (order.status === "cancelled") return "Annulee";
-  if (order.mode === "pickup") return "Prête dans 5 min";
+  if (order.mode === "pickup") return "Pr?te dans 25 min";
   const distanceMinutes = Math.max(0, Math.round((Number(order.distanceKm || order.distance_km || 0)) * 3));
   const queueMinutes = Math.max(0, activeOrders) * 4;
   const estimateMin = Math.max(15, Number(preparationTimeBase || fallbackSettings.preparationTimeBase) + distanceMinutes + queueMinutes);
@@ -557,50 +559,57 @@ function computeLiveTracking(row, fallbackEstimate = null) {
       estimatedTime: "Annulee"
     };
   }
+
+  if (row.mode === "pickup") {
+    const now = Date.now();
+    const createdAt = new Date(row.created_at).getTime();
+    const acceptedUntil = row.accepted_until
+      ? new Date(row.accepted_until).getTime()
+      : createdAt + 5 * 60 * 1000;
+    const preparingUntil = row.preparing_until
+      ? new Date(row.preparing_until).getTime()
+      : acceptedUntil + 20 * 60 * 1000;
+
+    let displayStatus = rawStatus === "ready" || rawStatus === "delivered" ? "ready" : "accepted";
+    let countdownMinutesRemaining = 0;
+    let trackingProgress = 0;
+    let estimatedTime = "";
+
+    if (displayStatus === "ready") {
+      countdownMinutesRemaining = 0;
+      trackingProgress = 100;
+      estimatedTime = "Commande pr?te";
+    } else if (now < acceptedUntil) {
+      displayStatus = "accepted";
+      countdownMinutesRemaining = Math.max(0, Math.ceil((acceptedUntil - now) / 60000));
+      trackingProgress = Math.min(33, Math.max(0, Math.round(((now - createdAt) / (acceptedUntil - createdAt)) * 33)));
+      estimatedTime = `Accept?e ? ${countdownMinutesRemaining} min restantes`;
+    } else if (now < preparingUntil) {
+      displayStatus = "preparing";
+      countdownMinutesRemaining = Math.max(0, Math.ceil((preparingUntil - now) / 60000));
+      trackingProgress = 34 + Math.min(65, Math.max(0, Math.round(((now - acceptedUntil) / (preparingUntil - acceptedUntil)) * 66)));
+      estimatedTime = `En pr?paration ? ${countdownMinutesRemaining} min restantes`;
+    } else {
+      displayStatus = "ready";
+      countdownMinutesRemaining = 0;
+      trackingProgress = 100;
+      estimatedTime = "Commande pr?te";
+    }
+
+    return {
+      displayStatus,
+      countdownMinutesRemaining,
+      trackingProgress,
+      estimatedTime
+    };
+  }
+
   if (rawStatus === "delivered") {
     return {
       displayStatus: "delivered",
       countdownMinutesRemaining: 0,
       trackingProgress: 100,
-      estimatedTime: "Commande livree ✅"
-    };
-  }
-
-  if (row.mode === "pickup") {
-    if (rawStatus === "ready") {
-      return {
-        displayStatus: "ready",
-        countdownMinutesRemaining: 0,
-        trackingProgress: 66,
-        estimatedTime: "Commande prête"
-      };
-    }
-
-    const readyAt = row.ready_at ? new Date(row.ready_at) : null;
-    if (!readyAt || Number.isNaN(readyAt.getTime())) {
-      return {
-        displayStatus: "preparing",
-        countdownMinutesRemaining: null,
-        trackingProgress: 12,
-        estimatedTime: "Prête dans 5 min"
-      };
-    }
-
-    const remaining = Math.max(0, Math.ceil((readyAt.getTime() - Date.now()) / 60000));
-    if (remaining <= 0) {
-      return {
-        displayStatus: "ready",
-        countdownMinutesRemaining: 0,
-        trackingProgress: 66,
-        estimatedTime: "Commande prête"
-      };
-    }
-
-    return {
-      displayStatus: "preparing",
-      countdownMinutesRemaining: remaining,
-      trackingProgress: Math.min(60, Math.max(6, Math.round(((5 - remaining) / 5) * 66))),
-      estimatedTime: `Prête dans ${remaining} min`
+      estimatedTime: "Commande livree ?"
     };
   }
 
@@ -628,11 +637,12 @@ function computeLiveTracking(row, fallbackEstimate = null) {
     displayStatus,
     countdownMinutesRemaining: remaining,
     trackingProgress: progress,
-    estimatedTime: displayStatus === "delivered" ? "Commande livree ✅" : `Livraison estimee dans ${remaining} min`
+    estimatedTime: displayStatus === "delivered" ? "Commande livree ?" : `Livraison estimee dans ${remaining} min`
   };
 }
 
 function applyOrderTracking(row, activeOrders = 0, preparationTimeBase = fallbackSettings.preparationTimeBase) {
+
   const baseOrder = mapOrderRow(row);
   const fallbackEstimate = getEstimatedTime(row, activeOrders, preparationTimeBase);
   const tracking = computeLiveTracking(row, fallbackEstimate);
@@ -1011,17 +1021,24 @@ async function createOrderRecord(order) {
       const estimateMax = estimateMin + 10;
       const estimatedTime = `${estimateMin}-${estimateMax} min`;
       const pickupReadyAt = order.mode === "pickup"
+        ? new Date(Date.now() + 25 * 60 * 1000).toISOString()
+        : null;
+      const acceptedUntil = order.mode === "pickup"
         ? new Date(Date.now() + 5 * 60 * 1000).toISOString()
         : null;
-      const initialStatus = order.mode === "pickup" ? "preparing" : "new";
+      const preparingUntil = order.mode === "pickup"
+        ? new Date(Date.now() + 25 * 60 * 1000).toISOString()
+        : null;
+      const initialStatus = order.mode === "pickup" ? "accepted" : "new";
 
       const orderResult = await client.query(`
         INSERT INTO orders (
           customer_name, customer_phone, customer_email, firebase_uid,
-          mode, address, latitude, longitude, distance_km, delivery_zone_radius, accepted_at, ready_at, estimated_delivery_minutes,
+          mode, address, latitude, longitude, distance_km, delivery_zone_radius, accepted_at, ready_at,
+          accepted_until, preparing_until, estimated_delivery_minutes,
           delivery_fee, subtotal, discount, total, promo_code, whatsapp_message, status, customer_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, NULL, $12, $13, $14, $15, $16, $17, $18, $19)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12, $13, NULL, $14, $15, $16, $17, $18, $19, $20, $21)
         RETURNING *
       `, [
         order.customerName || "",
@@ -1035,6 +1052,8 @@ async function createOrderRecord(order) {
         order.distanceKm,
         order.deliveryZoneRadius,
         pickupReadyAt,
+        acceptedUntil,
+        preparingUntil,
         order.deliveryFee,
         order.subtotal,
         order.discount,
@@ -1196,10 +1215,23 @@ async function updateOrderStatus(orderId, status) {
           ELSE accepted_at
         END,
         ready_at = CASE
-          WHEN $2 = 'preparing' AND mode = 'pickup' THEN NOW() + INTERVAL '5 minutes'
-          WHEN $2 = 'ready' THEN NOW()
+          WHEN $2 = 'ready' AND mode = 'pickup' THEN NOW()
+          WHEN $2 IN ('accepted', 'preparing', 'cancelled') AND mode = 'pickup' THEN NULL
           WHEN $2 IN ('new', 'delivered', 'cancelled') THEN NULL
           ELSE ready_at
+        END,
+        accepted_until = CASE
+          WHEN $2 = 'accepted' AND mode = 'pickup' THEN NOW() + INTERVAL '5 minutes'
+          WHEN $2 = 'preparing' AND mode = 'pickup' THEN NOW()
+          WHEN $2 IN ('ready', 'cancelled') AND mode = 'pickup' THEN accepted_until
+          ELSE accepted_until
+        END,
+        preparing_until = CASE
+          WHEN $2 = 'accepted' AND mode = 'pickup' THEN NOW() + INTERVAL '25 minutes'
+          WHEN $2 = 'preparing' AND mode = 'pickup' THEN NOW() + INTERVAL '20 minutes'
+          WHEN $2 = 'ready' AND mode = 'pickup' THEN NOW()
+          WHEN $2 = 'cancelled' AND mode = 'pickup' THEN preparing_until
+          ELSE preparing_until
         END,
         estimated_delivery_minutes = CASE
           WHEN $2 = 'accepted' AND mode = 'delivery' THEN $3
