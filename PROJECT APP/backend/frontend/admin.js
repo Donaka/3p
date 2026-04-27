@@ -153,6 +153,8 @@ const defaultDeliveryCountdownMinutes = document.querySelector("#defaultDelivery
 
 let currentSection = "dashboard";
 
+notifyFirebaseInitState();
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, character => ({
     "&": "&amp;",
@@ -189,6 +191,16 @@ function showToast(message) {
   adminToast.classList.add("visible");
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => adminToast.classList.remove("visible"), 1800);
+}
+
+function notifyFirebaseInitState() {
+  const firebaseReadyPromise = window.__firebaseReadyPromise;
+  if (!firebaseReadyPromise || typeof firebaseReadyPromise.then !== "function") return;
+  firebaseReadyPromise.catch(error => {
+    console.error("Admin Firebase init failed:", error);
+    setSaveStatus("Firebase config unavailable", "error");
+    showToast("Firebase configuration unavailable. Notifications may be limited.");
+  });
 }
 
 function imageSource(url) {

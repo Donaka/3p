@@ -1,5 +1,5 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-app.js";
-import { getMessaging, getToken, onMessage } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-messaging.js";
+import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-app.js";
+import { getMessaging, getToken, onMessage, isSupported as isMessagingSupported } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-messaging.js";
 import { getAuth } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-auth.js";
 
 export const firebaseConfig = {
@@ -12,9 +12,33 @@ export const firebaseConfig = {
   measurementId: "G-GH4JFZE82L"
 };
 
-// Initialize Firebase ONCE
-export const app = initializeApp(firebaseConfig);
-export const messaging = typeof window !== 'undefined' && 'Notification' in window ? getMessaging(app) : null;
+export const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+export let messaging = null;
+export const firebaseReady = (async () => {
+  try {
+    if (typeof window !== "undefined") {
+      window.__firebaseApp = app;
+      window.firebaseConfig = firebaseConfig;
+    }
+    if (typeof window !== "undefined" && "Notification" in window) {
+      const supported = await isMessagingSupported().catch(() => false);
+      if (supported) {
+        messaging = getMessaging(app);
+      }
+    }
+    if (typeof window !== "undefined") {
+      window.__firebaseReady = true;
+      window.__firebaseReadyError = null;
+    }
+    return { app, auth, messaging };
+  } catch (error) {
+    console.error("Firebase initialization failed:", error);
+    if (typeof window !== "undefined") {
+      window.__firebaseReady = false;
+      window.__firebaseReadyError = error;
+    }
+    throw error;
+  }
+})();
 export { getToken, onMessage };
-window.firebaseConfig = firebaseConfig; // Fallback for sw.js or other older scripts if needed
