@@ -1,5 +1,5 @@
 import admin from "firebase-admin";
-import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import fs, { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path, { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
@@ -1773,21 +1773,30 @@ function readBody(request) {
   });
 }
 
-const frontendRoot = normalize(firstExistingPath(
-  join(root, "frontend"),
-  join(root, "..", "frontend")
-));
+// 1. Static file serving (FROM ROOT as requested)
+app.use(express.static(__dirname));
 
-// Static file serving from the frontend folder
-app.use(express.static(join(__dirname, "frontend")));
-
-// Explicit Admin routes
-app.get("/admin", (req, res) => {
-  res.sendFile(join(__dirname, "frontend", "admin.html"));
+// 2. DEBUG ENDPOINT
+app.get("/debug-files", (req, res) => {
+  res.json({
+    cwd: process.cwd(),
+    __dirname,
+    files: fs.readdirSync(__dirname),
+    adminExists: fs.existsSync(path.join(__dirname, "admin.html"))
+  });
 });
 
-app.get("/admin.html", (req, res) => {
-  res.sendFile(join(__dirname, "frontend", "admin.html"));
+// 3. ADMIN ROUTES (Explicit with fallback)
+app.get(["/admin", "/admin.html"], (req, res) => {
+  const filePath = path.join(__dirname, "admin.html");
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({
+      error: "admin.html not found",
+      path: filePath,
+      files: fs.readdirSync(__dirname)
+    });
+  }
+  res.sendFile(filePath);
 });
 
 const asyncHandler = (fn) => (req, res, next) => {
