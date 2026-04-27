@@ -8,6 +8,8 @@
     "start": "node server.mjs"
   },
   "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
     "firebase-admin": "^12.1.0",
     "pg": "^8.16.3"
   }
