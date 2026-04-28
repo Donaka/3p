@@ -120,15 +120,21 @@ const dbPool = hasDatabase ? new Pool({
 let dbInitPromise = null;
 let dbInitError = hasDatabase ? null : new Error("DATABASE_URL is missing. PostgreSQL is required for orders and customers.");
 const fallbackSettings = {
+  storeName: "3P CHICKEN POPS",
   heroImages: [],
   shopLatitude: 30.4017949,
   shopLongitude: -9.5510469,
+  shopAddress: "3P Chicken Pops, Agadir, Maroc",
+  shopPhone: "212688943959",
+  shopWhatsAppNumber: "212688943959",
   deliveryPricePerKm: 5,
-  minimumDeliveryPrice: 0,
+  minimumDeliveryPrice: 10,
+  baseDeliveryDistanceKm: 1,
+  extraKmPrice: 5,
+  maxDeliveryKm: 20,
   minimumOrderAmount: 0,
   preparationTimeBase: 20,
   defaultDeliveryCountdownMinutes: 30,
-  shopWhatsAppNumber: "212688943959",
   deliveryZones: [],
   promoCodes: [],
   isStoreOpen: true,
@@ -226,9 +232,16 @@ async function ensureDatabase() {
         await client.query(`
           CREATE TABLE IF NOT EXISTS settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
+            store_name TEXT NOT NULL DEFAULT '3P CHICKEN POPS',
+            shop_address TEXT NOT NULL DEFAULT '',
+            shop_phone TEXT NOT NULL DEFAULT '',
             shop_latitude DOUBLE PRECISION NOT NULL DEFAULT 30.4017949,
             shop_longitude DOUBLE PRECISION NOT NULL DEFAULT -9.5510469,
             shop_whatsapp_number TEXT NOT NULL DEFAULT '212688943959',
+            minimum_delivery_price NUMERIC(10, 2) NOT NULL DEFAULT 10,
+            base_delivery_distance_km NUMERIC(10, 2) NOT NULL DEFAULT 1,
+            extra_km_price NUMERIC(10, 2) NOT NULL DEFAULT 5,
+            max_delivery_km NUMERIC(10, 2),
             minimum_order_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,
             preparation_time_base INTEGER NOT NULL DEFAULT 20,
             default_delivery_countdown_minutes INTEGER NOT NULL DEFAULT 30,
@@ -240,6 +253,13 @@ async function ensureDatabase() {
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           );
         `);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS store_name TEXT NOT NULL DEFAULT '3P CHICKEN POPS';`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS shop_address TEXT NOT NULL DEFAULT '';`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS shop_phone TEXT NOT NULL DEFAULT '';`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS minimum_delivery_price NUMERIC(10, 2) NOT NULL DEFAULT 10;`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS base_delivery_distance_km NUMERIC(10, 2) NOT NULL DEFAULT 1;`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS extra_km_price NUMERIC(10, 2) NOT NULL DEFAULT 5;`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS max_delivery_km NUMERIC(10, 2);`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS shop_whatsapp_number TEXT NOT NULL DEFAULT '212688943959';`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS minimum_order_amount NUMERIC(10, 2) NOT NULL DEFAULT 0;`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS preparation_time_base INTEGER NOT NULL DEFAULT 20;`);
@@ -254,9 +274,16 @@ async function ensureDatabase() {
           VALUES (1, $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, NOW())
           ON CONFLICT (id) DO NOTHING
         `, [
+          defaultSettings.storeName,
+          defaultSettings.shopAddress,
+          defaultSettings.shopPhone,
           defaultSettings.shopLatitude,
           defaultSettings.shopLongitude,
           defaultSettings.shopWhatsAppNumber,
+          defaultSettings.minimumDeliveryPrice,
+          defaultSettings.baseDeliveryDistanceKm,
+          defaultSettings.extraKmPrice,
+          defaultSettings.maxDeliveryKm,
           defaultSettings.minimumOrderAmount,
           defaultSettings.preparationTimeBase,
           defaultSettings.defaultDeliveryCountdownMinutes,
@@ -384,12 +411,18 @@ function normalizeSettings(settings = {}) {
     ? settings.heroImages
     : [settings.heroImageUrl || ""];
   return {
+    storeName: String(settings.storeName || fallbackSettings.storeName).trim(),
+    shopAddress: String(settings.shopAddress || "").trim(),
+    shopPhone: String(settings.shopPhone || "").trim(),
     heroImages: rawHeroImages.map(item => String(item || "").trim()).filter(Boolean).slice(0, 5),
     shopLatitude: Number(settings.shopLatitude) || fallbackSettings.shopLatitude,
     shopLongitude: Number(settings.shopLongitude) || fallbackSettings.shopLongitude,
     shopWhatsAppNumber: String(settings.shopWhatsAppNumber || fallbackSettings.shopWhatsAppNumber).replace(/[^\d]/g, "").trim() || fallbackSettings.shopWhatsAppNumber,
     deliveryPricePerKm: Math.max(0, Number(settings.deliveryPricePerKm) || fallbackSettings.deliveryPricePerKm),
-    minimumDeliveryPrice: Math.max(0, Number(settings.minimumDeliveryPrice) || fallbackSettings.minimumDeliveryPrice),
+    minimumDeliveryPrice: Math.max(0, Number(settings.minimumDeliveryPrice) ?? fallbackSettings.minimumDeliveryPrice),
+    baseDeliveryDistanceKm: Math.max(0, Number(settings.baseDeliveryDistanceKm) ?? fallbackSettings.baseDeliveryDistanceKm),
+    extraKmPrice: Math.max(0, Number(settings.extraKmPrice) ?? fallbackSettings.extraKmPrice),
+    maxDeliveryKm: parseOptionalNumber(settings.maxDeliveryKm),
     minimumOrderAmount: Math.max(0, Number(settings.minimumOrderAmount) || fallbackSettings.minimumOrderAmount),
     preparationTimeBase: Math.max(5, Math.round(Number(settings.preparationTimeBase) || fallbackSettings.preparationTimeBase)),
     defaultDeliveryCountdownMinutes: Math.max(5, Math.round(Number(settings.defaultDeliveryCountdownMinutes) || fallbackSettings.defaultDeliveryCountdownMinutes)),
@@ -701,10 +734,17 @@ async function loadSettingsRowDirect() {
 
 function mapSettingsRow(row) {
   return normalizeSettings({
+    storeName: row?.store_name,
+    shopAddress: row?.shop_address,
+    shopPhone: row?.shop_phone,
     heroImages: Array.isArray(row?.hero_images_json) ? row.hero_images_json : [],
     shopLatitude: row?.shop_latitude,
     shopLongitude: row?.shop_longitude,
     shopWhatsAppNumber: row?.shop_whatsapp_number,
+    minimumDeliveryPrice: row?.minimum_delivery_price,
+    baseDeliveryDistanceKm: row?.base_delivery_distance_km,
+    extraKmPrice: row?.extra_km_price,
+    maxDeliveryKm: row?.max_delivery_km,
     minimumOrderAmount: row?.minimum_order_amount,
     preparationTimeBase: row?.preparation_time_base,
     defaultDeliveryCountdownMinutes: row?.default_delivery_countdown_minutes,
@@ -760,13 +800,23 @@ async function updateSettingsInDb(settings) {
     const normalized = normalizeSettings(settings);
         const result = await dbPool.query(`
           INSERT INTO settings (
-            id, shop_latitude, shop_longitude, shop_whatsapp_number, minimum_order_amount, preparation_time_base, default_delivery_countdown_minutes, delivery_zones_json, promo_codes_json, hero_images_json, is_store_open, closed_message, updated_at
+            id, store_name, shop_address, shop_phone, shop_latitude, shop_longitude, shop_whatsapp_number,
+            minimum_delivery_price, base_delivery_distance_km, extra_km_price, max_delivery_km,
+            minimum_order_amount, preparation_time_base, default_delivery_countdown_minutes,
+            delivery_zones_json, promo_codes_json, hero_images_json, is_store_open, closed_message, updated_at
           )
-          VALUES (1, $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, NOW())
+          VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18, NOW())
           ON CONFLICT (id) DO UPDATE SET
+            store_name = EXCLUDED.store_name,
+            shop_address = EXCLUDED.shop_address,
+            shop_phone = EXCLUDED.shop_phone,
             shop_latitude = EXCLUDED.shop_latitude,
             shop_longitude = EXCLUDED.shop_longitude,
             shop_whatsapp_number = EXCLUDED.shop_whatsapp_number,
+            minimum_delivery_price = EXCLUDED.minimum_delivery_price,
+            base_delivery_distance_km = EXCLUDED.base_delivery_distance_km,
+            extra_km_price = EXCLUDED.extra_km_price,
+            max_delivery_km = EXCLUDED.max_delivery_km,
             minimum_order_amount = EXCLUDED.minimum_order_amount,
             preparation_time_base = EXCLUDED.preparation_time_base,
             default_delivery_countdown_minutes = EXCLUDED.default_delivery_countdown_minutes,
@@ -778,18 +828,25 @@ async function updateSettingsInDb(settings) {
             updated_at = NOW()
           RETURNING *
         `, [
+          normalized.storeName,
+          normalized.shopAddress,
+          normalized.shopPhone,
           normalized.shopLatitude,
           normalized.shopLongitude,
           normalized.shopWhatsAppNumber,
+          normalized.minimumDeliveryPrice,
+          normalized.baseDeliveryDistanceKm,
+          normalized.extraKmPrice,
+          normalized.maxDeliveryKm,
           normalized.minimumOrderAmount,
           normalized.preparationTimeBase,
           normalized.defaultDeliveryCountdownMinutes,
           JSON.stringify(normalized.deliveryZones),
           JSON.stringify(normalized.promoCodes),
           JSON.stringify(normalized.heroImages),
-      normalized.isStoreOpen,
-      normalized.closedMessage
-    ]);
+          normalized.isStoreOpen,
+          normalized.closedMessage
+        ]);
     console.log("Settings saved to PostgreSQL", {
       updatedAt: result.rows[0]?.updated_at,
       isStoreOpen: normalized.isStoreOpen,

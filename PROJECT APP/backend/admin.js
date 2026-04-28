@@ -1,9 +1,9 @@
 const admin = {
     password: localStorage.getItem('3p_admin_password') || '',
-    menu: null,
-    orders: [],
     tokens: [],
     currentTab: 'dashboard',
+    map: null,
+    shopMarker: null,
 
     init() {
         this.bindEvents();
@@ -29,6 +29,19 @@ const admin = {
         document.getElementById('settings-form').addEventListener('submit', (e) => {
             e.preventDefault();
             this.saveSettings();
+        });
+        
+        // Settings Listeners
+        ['setting-min-delivery-price', 'setting-base-distance', 'setting-extra-km-price'].forEach(id => {
+            document.getElementById(id)?.addEventListener('input', () => this.updateDeliveryPreview());
+        });
+
+        document.getElementById('map-search-btn')?.addEventListener('click', () => this.searchAddress());
+        document.getElementById('map-search-input')?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                this.searchAddress();
+            }
         });
         document.getElementById('push-form').addEventListener('submit', (e) => {
             e.preventDefault();
@@ -167,6 +180,8 @@ const admin = {
         let locationHtml = '';
         if (order.mode === 'delivery' && order.latitude && order.longitude) {
             locationHtml = `
+                <p><strong>Distance:</strong> ${order.distanceKm || 0} km</p>
+                <p><strong>Frais Livraison:</strong> ${order.deliveryFee || 0} MAD</p>
                 <p><strong>Position GPS:</strong> ${order.latitude}, ${order.longitude} ${order.locationAccuracy ? `(±${Math.round(order.locationAccuracy)}m)` : ''}</p>
                 <p><strong>Google Maps:</strong> <a href="https://www.google.com/maps/search/?api=1&query=${order.latitude},${order.longitude}" target="_blank">Ouvrir dans Maps</a></p>
             `;
@@ -255,20 +270,113 @@ const admin = {
 
     async loadSettings() {
         const settings = await this.api('/api/settings');
+        document.getElementById('setting-store-name').value = settings.storeName || '';
         document.getElementById('setting-is-open').checked = settings.isStoreOpen;
-        document.getElementById('setting-closed-message').value = settings.closedMessage;
-        document.getElementById('setting-whatsapp').value = settings.shopWhatsAppNumber;
+        document.getElementById('setting-phone').value = settings.shopPhone || '';
+        document.getElementById('setting-whatsapp').value = settings.shopWhatsAppNumber || '';
+        document.getElementById('setting-address').value = settings.shopAddress || '';
+        document.getElementById('setting-closed-message').value = settings.closedMessage || '';
+        
         document.getElementById('setting-lat').value = settings.shopLatitude;
         document.getElementById('setting-lng').value = settings.shopLongitude;
+        
+        document.getElementById('setting-min-delivery-price').value = settings.minimumDeliveryPrice ?? 10;
+        document.getElementById('setting-base-distance').value = settings.baseDeliveryDistanceKm ?? 1;
+        document.getElementById('setting-extra-km-price').value = settings.extraKmPrice ?? 5;
+        document.getElementById('setting-max-distance').value = settings.maxDeliveryKm || '';
+
+        this.initMap(settings.shopLatitude, settings.shopLongitude);
+        this.updateDeliveryPreview();
+    },
+
+    initMap(lat, lng) {
+        if (this.map) {
+            this.map.setView([lat, lng], 13);
+            if (this.shopMarker) this.shopMarker.setLatLng([lat, lng]);
+            return;
+        }
+
+        this.map = L.map('shop-map').setView([lat, lng], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(this.map);
+
+        this.shopMarker = L.marker([lat, lng], { draggable: true }).addTo(this.map);
+        
+        this.shopMarker.on('dragend', () => {
+            const pos = this.shopMarker.getLatLng();
+            document.getElementById('setting-lat').value = pos.lat.toFixed(7);
+            document.getElementById('setting-lng').value = pos.lng.toFixed(7);
+        });
+
+        this.map.on('click', (e) => {
+            this.shopMarker.setLatLng(e.latlng);
+            document.getElementById('setting-lat').value = e.latlng.lat.toFixed(7);
+            document.getElementById('setting-lng').value = e.latlng.lng.toFixed(7);
+        });
+
+        // Small delay to fix gray map issue in hidden tabs
+        setTimeout(() => this.map.invalidateSize(), 200);
+    },
+
+    async searchAddress() {
+        const query = document.getElementById('map-search-input').value;
+        if (!query) return;
+        
+        try {
+            const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`);
+            const data = await res.json();
+            if (data.length > 0) {
+                const { lat, lon } = data[0];
+                const newLat = parseFloat(lat);
+                const newLng = parseFloat(lon);
+                this.map.setView([newLat, newLng], 16);
+                this.shopMarker.setLatLng([newLat, newLng]);
+                document.getElementById('setting-lat').value = newLat.toFixed(7);
+                document.getElementById('setting-lng').value = newLng.toFixed(7);
+            } else {
+                alert('Adresse non trouvée');
+            }
+        } catch (e) {
+            console.error('Search error', e);
+        }
+    },
+
+    updateDeliveryPreview() {
+        const minPrice = parseFloat(document.getElementById('setting-min-delivery-price').value) || 0;
+        const baseDist = parseFloat(document.getElementById('setting-base-distance').value) || 0;
+        const extraPrice = parseFloat(document.getElementById('setting-extra-km-price').value) || 0;
+        
+        const tbody = document.getElementById('delivery-preview-body');
+        tbody.innerHTML = '';
+        
+        const testDistances = [0.5, 1, 1.5, 2, 3, 5, 10];
+        testDistances.forEach(d => {
+            let price = minPrice;
+            if (d > baseDist) {
+                price = minPrice + Math.ceil(d - baseDist) * extraPrice;
+            }
+            
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${d} km</td><td><strong>${price} MAD</strong></td>`;
+            tbody.appendChild(tr);
+        });
     },
 
     async saveSettings() {
         const body = {
+            storeName: document.getElementById('setting-store-name').value,
             isStoreOpen: document.getElementById('setting-is-open').checked,
-            closedMessage: document.getElementById('setting-closed-message').value,
+            shopPhone: document.getElementById('setting-phone').value,
             shopWhatsAppNumber: document.getElementById('setting-whatsapp').value,
+            shopAddress: document.getElementById('setting-address').value,
+            closedMessage: document.getElementById('setting-closed-message').value,
             shopLatitude: parseFloat(document.getElementById('setting-lat').value),
-            shopLongitude: parseFloat(document.getElementById('setting-lng').value)
+            shopLongitude: parseFloat(document.getElementById('setting-lng').value),
+            minimumDeliveryPrice: parseFloat(document.getElementById('setting-min-delivery-price').value),
+            baseDeliveryDistanceKm: parseFloat(document.getElementById('setting-base-distance').value),
+            extraKmPrice: parseFloat(document.getElementById('setting-extra-km-price').value),
+            maxDeliveryKm: parseFloat(document.getElementById('setting-max-distance').value) || null
         };
         await this.api('/api/settings', 'PUT', body);
         alert('Paramètres enregistrés !');
