@@ -1065,7 +1065,7 @@ async function createOrderRecord(order) {
           accepted_until, preparing_until, estimated_delivery_minutes,
           delivery_fee, subtotal, discount, total, promo_code, whatsapp_message, status, customer_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12, $13, NULL, $14, $15, $16, $17, $18, $19, $20, $21)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL, $13, $14, $15, NULL, $16, $17, $18, $19, $20, $21, $22, $23)
         RETURNING *
       `, [
         order.customerName || "",
