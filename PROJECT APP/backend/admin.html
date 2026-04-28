@@ -240,7 +240,11 @@
                         </select>
                     </div>
                     <div class="form-row">
-                        <label>Action au clic (Optionnel)</label>
+                        <label>Image URL (HTTPS)</label>
+                        <input type="url" id="push-image-url" placeholder="https://...">
+                    </div>
+                    <div class="form-row">
+                        <label>Action au clic</label>
                         <select id="push-type">
                             <option value="home">Accueil</option>
                             <option value="product">Produit spécifique</option>
@@ -248,9 +252,11 @@
                             <option value="order">Commande spécifique</option>
                         </select>
                     </div>
-                    <div id="push-id-field" class="form-row hidden">
-                        <label>ID (Produit/Cat/Order)</label>
-                        <input type="text" id="push-link-id">
+                    <div class="form-row" id="push-link-container" style="display: none;">
+                        <label>Sélectionner cible</label>
+                        <select id="push-link-id">
+                            <option value="">-- Choisir --</option>
+                        </select>
                     </div>
                     <button type="submit" class="btn-push">🚀 Envoyer la notification</button>
                 </form>

@@ -160,7 +160,8 @@ async function ensureDatabase() {
             firebase_uid TEXT,
             total_orders INTEGER NOT NULL DEFAULT 0,
             total_spent NUMERIC(12, 2) NOT NULL DEFAULT 0,
-            last_order_at TIMESTAMPTZ
+            last_order_at TIMESTAMPTZ,
+            auth_provider TEXT NOT NULL DEFAULT 'phone'
           );
         `);
         await client.query(`
@@ -351,6 +352,7 @@ async function ensureDatabase() {
         await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ;`);
         await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;`);
         await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS read BOOLEAN NOT NULL DEFAULT FALSE;`);
+        await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS auth_provider TEXT NOT NULL DEFAULT 'phone';`);
         await client.query(`
           CREATE INDEX IF NOT EXISTS notifications_created_at_idx ON notifications(created_at DESC);
         `);
@@ -512,6 +514,7 @@ function normalizeOrderPayload(payload) {
     customerPhone,
     customerEmail: trimOrNull(payload.customerEmail),
     firebaseUid,
+    authProvider: payload.authProvider || 'phone',
     mode: payload.mode === "pickup" ? "pickup" : "delivery",
     address: trimOrNull(payload.address),
     latitude,
@@ -591,14 +594,18 @@ function mapCustomerRow(row) {
 
 function mapCustomerSession(row) {
   const phone = String(row?.phone || "").trim();
-  const fallbackName = phone ? `Client ${phone.slice(-4)}` : "Client 3P";
+  const firebaseUid = row?.firebase_uid || "";
+  const provider = row?.auth_provider || "phone";
+  const fallbackName = phone ? `Client ${phone.slice(-4)}` : (firebaseUid ? `Client ${firebaseUid.slice(-4)}` : "Client 3P");
+  
   return {
-    uid: phone ? `phone:${phone}` : `customer:${row?.id || ""}`,
+    uid: firebaseUid || (phone ? `phone:${phone}` : `customer:${row?.id || ""}`),
     displayName: String(row?.name || "").trim() || fallbackName,
-    email: "",
+    email: row?.email || "",
     photoURL: "",
     phone,
-    provider: "phone-local"
+    firebaseUid,
+    provider
   };
 }
 
@@ -1049,6 +1056,7 @@ async function upsertCustomer(client, order) {
         phone = COALESCE($3, phone),
         email = COALESCE($4, email),
         firebase_uid = COALESCE($5, firebase_uid),
+        auth_provider = COALESCE(NULLIF($7, ''), auth_provider),
         total_orders = total_orders + 1,
         total_spent = total_spent + $6,
         last_order_at = NOW(),
@@ -1061,75 +1069,79 @@ async function upsertCustomer(client, order) {
       order.customerPhone,
       order.customerEmail,
       order.firebaseUid,
-      order.total
+      order.total,
+      order.authProvider || 'phone'
     ]);
     return result.rows[0];
   }
 
   const result = await client.query(`
     INSERT INTO customers (
-      name, phone, email, firebase_uid, total_orders, total_spent, last_order_at
+      name, phone, email, firebase_uid, auth_provider, total_orders, total_spent, last_order_at
     )
-    VALUES ($1, $2, $3, $4, 1, $5, NOW())
+    VALUES ($1, $2, $3, $4, $6, 1, $5, NOW())
     RETURNING *
   `, [
     order.customerName || "",
     order.customerPhone,
     order.customerEmail,
     order.firebaseUid,
-    order.total
+    order.total,
+    order.authProvider || 'phone'
   ]);
   return result.rows[0];
 }
 
-async function authenticateCustomerByPhone({ phone = "", name = "" } = {}) {
+async function authenticateCustomer({ phone = "", name = "", email = "", firebaseUid = "", provider = "phone" } = {}) {
   return withDatabase(async () => {
     const normalizedPhone = normalizePhone(phone);
     const normalizedName = String(name || "").trim();
-    if (!normalizedPhone) {
-      throw new Error("Phone number is required");
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    
+    if (!firebaseUid && !normalizedPhone) {
+      throw new Error("Phone number or Firebase UID is required");
     }
 
-    const existingResult = await dbPool.query(`
-      SELECT *
-      FROM customers
-      WHERE phone = $1
-      LIMIT 1
-    `, [normalizedPhone]);
+    let customer = null;
+    if (firebaseUid) {
+      const res = await dbPool.query("SELECT * FROM customers WHERE firebase_uid = $1 LIMIT 1", [firebaseUid]);
+      customer = res.rows[0];
+    }
+    
+    if (!customer && normalizedPhone) {
+      const res = await dbPool.query("SELECT * FROM customers WHERE phone = $1 LIMIT 1", [normalizedPhone]);
+      customer = res.rows[0];
+    }
 
-    let customer = existingResult.rows[0] || null;
     if (customer) {
-      if (normalizedName && normalizedName !== customer.name) {
-        const updatedResult = await dbPool.query(`
-          UPDATE customers
-          SET
-            name = COALESCE(NULLIF($2, ''), name),
-            updated_at = NOW()
-          WHERE id = $1
-          RETURNING *
-        `, [customer.id, normalizedName]);
-        customer = updatedResult.rows[0] || customer;
-      }
-    } else {
-      if (!normalizedName) {
-        throw new Error("Name is required for first login");
-      }
-      const insertedResult = await dbPool.query(`
-        INSERT INTO customers (
-          name, phone, total_orders, total_spent, updated_at
-        )
-        VALUES ($1, $2, 0, 0, NOW())
+      const res = await dbPool.query(`
+        UPDATE customers
+        SET
+          name = COALESCE(NULLIF($2, ''), name),
+          email = COALESCE(NULLIF($3, ''), email),
+          firebase_uid = COALESCE(NULLIF($4, ''), firebase_uid),
+          auth_provider = COALESCE(NULLIF($5, ''), auth_provider),
+          updated_at = NOW()
+        WHERE id = $1
         RETURNING *
-      `, [normalizedName, normalizedPhone]);
-      customer = insertedResult.rows[0];
+      `, [customer.id, normalizedName, normalizedEmail, firebaseUid, provider]);
+      return mapCustomerSession(res.rows[0]);
     }
 
-    return {
-      customer: mapCustomerRow(customer),
-      session: mapCustomerSession(customer)
-    };
+    const res = await dbPool.query(`
+      INSERT INTO customers (name, phone, email, firebase_uid, auth_provider)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+    `, [normalizedName, normalizedPhone, normalizedEmail, firebaseUid, provider]);
+    return mapCustomerSession(res.rows[0]);
   });
 }
+
+// Deprecated, use authenticateCustomer
+async function authenticateCustomerByPhone({ phone = "", name = "" } = {}) {
+  return authenticateCustomer({ phone, name, provider: 'phone' });
+}
+
 
 async function upsertAuthenticatedUser({ firebaseUid = "", phone = "", location = null, lastLoginAt = "" } = {}) {
   const normalizedPhone = normalizePhone(phone);
@@ -2298,9 +2310,12 @@ app.get("/api/orders/customer/:id", asyncHandler(async (req, res) => {
 }));
 
 app.post("/api/customer-auth", asyncHandler(async (req, res) => {
-  const result = await authenticateCustomerByPhone({
+  const result = await authenticateCustomer({
     phone: req.body.phone,
-    name: req.body.name
+    name: req.body.name,
+    email: req.body.email,
+    firebaseUid: req.body.firebaseUid,
+    provider: req.body.provider
   });
   res.json(result);
 }));
@@ -2430,25 +2445,38 @@ async function handleNotifyRequest(payload) {
 
   const messages = Array.from(targetTokens).map(token => ({
     token,
-    notification: { title, body: message },
+    notification: { 
+      title, 
+      body: message,
+      ...(payload.imageUrl ? { image: payload.imageUrl } : {})
+    },
     android: { 
       notification: { 
         sound: payload.useCustomSound ? "3p_notification" : "default", 
-        imageUrl,
-        channelId: "3p_orders"
+        imageUrl: payload.imageUrl || imageUrl,
+        channelId: "3p_orders",
+        icon: "notification_icon",
+        color: "#ff3b1f"
       } 
     },
     apns: {
       payload: {
         aps: {
-          sound: payload.useCustomSound ? "3p-notification.wav" : "default"
+          sound: payload.useCustomSound ? "3p-notification.wav" : "default",
+          "mutable-content": 1
         }
+      },
+      fcm_options: {
+        image: payload.imageUrl || imageUrl
       }
     },
     data: { 
       notificationId: String(savedNotification.id),
-      ...(linkedProductId ? { productId: linkedProductId } : {}),
-      ...(linkedCategoryId ? { categoryId: linkedCategoryId } : {})
+      type: String(payload.type || "home"),
+      ...(linkedProductId ? { productId: String(linkedProductId) } : {}),
+      ...(linkedCategoryId ? { categoryId: String(linkedCategoryId) } : {}),
+      ...(payload.orderId ? { orderId: String(payload.orderId) } : {}),
+      ...(payload.imageUrl ? { imageUrl: payload.imageUrl } : {})
     }
   }));
 

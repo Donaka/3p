@@ -47,11 +47,15 @@ const admin = {
             e.preventDefault();
             this.sendPush();
         });
+
         document.getElementById('push-type').addEventListener('change', (e) => {
-            const field = document.getElementById('push-id-field');
-            if (e.target.value === 'home') field.classList.add('hidden');
-            else field.classList.remove('hidden');
+            this.updatePushLinkOptions(e.target.value);
         });
+
+        document.getElementById('push-link-id').addEventListener('change', (e) => {
+            this.autoFillPushImage(e.target.value);
+        });
+
 
         document.querySelector('.close-modal').addEventListener('click', () => this.hideModal());
     },
@@ -469,6 +473,7 @@ const admin = {
         const payload = {
             title: document.getElementById('push-title').value,
             message: document.getElementById('push-body').value,
+            imageUrl: document.getElementById('push-image-url').value,
             customerId: document.getElementById('push-target').value,
             type: document.getElementById('push-type').value,
             id: document.getElementById('push-link-id').value,
