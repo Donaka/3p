@@ -348,6 +348,9 @@ async function ensureDatabase() {
         await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS starts_at TIMESTAMPTZ;`);
         await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS ends_at TIMESTAMPTZ;`);
         await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;`);
+        await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ;`);
+        await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;`);
+        await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS read BOOLEAN NOT NULL DEFAULT FALSE;`);
         await client.query(`
           CREATE INDEX IF NOT EXISTS notifications_created_at_idx ON notifications(created_at DESC);
         `);
@@ -637,7 +640,10 @@ function mapNotificationRow(row) {
     linkedCategoryId: row.linked_category_id || "",
     ctaText: row.cta_text || "",
     startsAt: row.starts_at || null,
-    endsAt: row.ends_at || null
+    endsAt: row.ends_at || null,
+    read: row.read || false,
+    seenAt: row.seen_at || null,
+    expiresAt: row.expires_at || null
   };
 }
 
@@ -1612,13 +1618,28 @@ async function createNotificationRecord(notification) {
   });
 }
 
+async function cleanupNotifications() {
+  return withDatabase(async () => {
+    const result = await dbPool.query(`
+      DELETE FROM notifications
+      WHERE read = true
+      AND expires_at < NOW()
+    `);
+    if (result.rowCount > 0) {
+      console.log(`[Cleanup] Deleted ${result.rowCount} expired notifications.`);
+    }
+  });
+}
+
 async function listNotifications({ customerId = "" } = {}) {
+  await cleanupNotifications(); // Clean before listing
   return withDatabase(async () => {
     const values = [];
     const filters = [
       "active = TRUE",
       "(starts_at IS NULL OR starts_at <= NOW())",
-      "(ends_at IS NULL OR ends_at >= NOW())"
+      "(ends_at IS NULL OR ends_at >= NOW())",
+      "(read = FALSE OR expires_at IS NULL OR expires_at > NOW())"
     ];
     if (customerId) {
       values.push(customerId);
@@ -1817,7 +1838,7 @@ async function unassignOptionGroupFromProduct(productId, groupId) {
 async function getDashboardStats() {
   return withDatabase(async () => {
     const menu = await loadMenuSafe();
-    const [todayResult, pendingResult, repeatResult, bestSellingResult] = await Promise.all([
+    const [todayResult, pendingResult, tokensResult] = await Promise.all([
       dbPool.query(`
         SELECT
           COUNT(*)::int AS today_orders,
@@ -1830,35 +1851,15 @@ async function getDashboardStats() {
         FROM orders
         WHERE status IN ('new', 'accepted', 'preparing')
       `),
-      dbPool.query(`
-        SELECT COUNT(*)::int AS repeat_customers
-        FROM customers
-        WHERE total_orders > 1
-      `),
-      dbPool.query(`
-        SELECT
-          oi.product_id,
-          oi.product_name,
-          SUM(oi.quantity)::int AS quantity
-        FROM order_items oi
-        JOIN orders o ON o.id = oi.order_id
-        GROUP BY oi.product_id, oi.product_name
-        ORDER BY quantity DESC, oi.product_name ASC
-        LIMIT 5
-      `)
+      dbPool.query("SELECT COUNT(*)::int AS count FROM device_tokens")
     ]);
 
     return {
       todayOrders: Number(todayResult.rows[0]?.today_orders || 0),
       todayRevenue: Number(todayResult.rows[0]?.today_revenue || 0),
       pendingOrders: Number(pendingResult.rows[0]?.pending_orders || 0),
-      repeatCustomers: Number(repeatResult.rows[0]?.repeat_customers || 0),
-      bestSellingProducts: bestSellingResult.rows.map(row => ({
-        productId: row.product_id || "",
-        productName: row.product_name || "",
-        quantity: Number(row.quantity || 0),
-        available: menu.products.some(product => String(product.id) === String(row.product_id) && product.available !== false)
-      }))
+      activeProducts: menu.products.filter(p => p.available).length,
+      registeredDevices: tokensResult.rows[0]?.count || 0
     };
   });
 }
@@ -2229,6 +2230,20 @@ app.all("/api/orders/:id/status", asyncHandler(async (req, res) => {
   res.json(order);
 }));
 
+app.post("/api/notifications/:id/seen", asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  await withDatabase(async () => {
+    await dbPool.query(`
+      UPDATE notifications
+      SET read = true,
+          seen_at = NOW(),
+          expires_at = NOW() + INTERVAL '24 hours'
+      WHERE id = $1
+    `, [id]);
+  });
+  res.json({ success: true });
+}));
+
 app.post("/api/notify", asyncHandler(async (req, res) => {
   if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
   // Notification logic...
@@ -2378,7 +2393,13 @@ app.listen(port, () => {
   console.log(`3P backend running on port ${port} (Express)`);
   if (hasDatabase) {
     ensureDatabase()
-      .then(() => console.log("PostgreSQL ready"))
+      .then(() => {
+        console.log("PostgreSQL ready");
+        // Initial cleanup
+        cleanupNotifications().catch(e => console.error("Initial cleanup failed:", e));
+        // Hourly cleanup
+        setInterval(() => cleanupNotifications().catch(e => console.error("Cleanup failed:", e)), 1000 * 60 * 60);
+      })
       .catch(error => console.error("PostgreSQL init failed:", error.message));
   }
 });
@@ -2410,8 +2431,25 @@ async function handleNotifyRequest(payload) {
   const messages = Array.from(targetTokens).map(token => ({
     token,
     notification: { title, body: message },
-    android: { notification: { sound: "default", imageUrl } },
-    data: { notificationId: String(savedNotification.id) }
+    android: { 
+      notification: { 
+        sound: payload.useCustomSound ? "3p_notification" : "default", 
+        imageUrl,
+        channelId: "3p_orders"
+      } 
+    },
+    apns: {
+      payload: {
+        aps: {
+          sound: payload.useCustomSound ? "3p-notification.wav" : "default"
+        }
+      }
+    },
+    data: { 
+      notificationId: String(savedNotification.id),
+      ...(linkedProductId ? { productId: linkedProductId } : {}),
+      ...(linkedCategoryId ? { categoryId: linkedCategoryId } : {})
+    }
   }));
 
   const batchResponse = await admin.messaging().sendEach(messages);

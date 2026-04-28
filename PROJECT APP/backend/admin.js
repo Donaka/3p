@@ -87,9 +87,41 @@ const admin = {
         } catch (e) {
             console.error('API Error:', path, e);
             if (!path.includes('/check')) {
-                alert(`Erreur API: ${e.message}`);
+                this.showToast(`Erreur API: ${e.message}`, 'error');
             }
             throw e;
+        }
+    },
+
+    showToast(message, type = 'success') {
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.classList.add('show'), 10);
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 300);
+        }, 4000);
+    },
+
+    playOrderSound() {
+        const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'); 
+        audio.play().catch(e => console.log('Audio blocked:', e));
+    },
+
+    orderPollingInterval: null,
+    lastOrderCount: 0,
+
+    startOrderPolling() {
+        if (this.orderPollingInterval) return;
+        this.orderPollingInterval = setInterval(() => this.loadOrders(true), 10000);
+    },
+
+    stopOrderPolling() {
+        if (this.orderPollingInterval) {
+            clearInterval(this.orderPollingInterval);
+            this.orderPollingInterval = null;
         }
     },
 
@@ -148,6 +180,12 @@ const admin = {
         document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
         document.getElementById(`${tab}-tab`).classList.add('active');
 
+        if (tab === 'orders') {
+            this.startOrderPolling();
+        } else {
+            this.stopOrderPolling();
+        }
+
         switch(tab) {
             case 'dashboard': this.loadDashboard(); break;
             case 'orders': this.loadOrders(); break;
@@ -180,9 +218,16 @@ const admin = {
         }
     },
 
-    async loadOrders() {
+    async loadOrders(isPolling = false) {
         const status = document.getElementById('order-status-filter').value;
         const data = await this.api(`/api/orders?status=${status}`);
+        
+        if (isPolling && data.orders.length > this.lastOrderCount) {
+            this.playOrderSound();
+            this.showToast('Nouvelle commande reçue !');
+        }
+        this.lastOrderCount = data.orders.length;
+
         const tbody = document.querySelector('#orders-table tbody');
         tbody.innerHTML = '';
 
@@ -426,7 +471,8 @@ const admin = {
             message: document.getElementById('push-body').value,
             customerId: document.getElementById('push-target').value,
             type: document.getElementById('push-type').value,
-            id: document.getElementById('push-link-id').value
+            id: document.getElementById('push-link-id').value,
+            useCustomSound: document.getElementById('push-custom-sound').checked
         };
 
         // Map type to the keys expected by /api/notify

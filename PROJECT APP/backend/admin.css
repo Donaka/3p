@@ -1,16 +1,21 @@
 :root {
     --primary: #FF4D00;
-    --primary-dark: #CC3D00;
+    --primary-gradient: linear-gradient(135deg, #FF4D00 0%, #FF8000 100%);
+    --primary-glow: rgba(255, 77, 0, 0.4);
     --secondary: #FF8000;
     --background: #000000;
-    --surface: #121212;
-    --surface-light: #1E1E1E;
-    --border: #2A2A2A;
+    --surface: #0A0A0A;
+    --surface-light: #151515;
+    --surface-lighter: #1F1F1F;
+    --border: #222222;
+    --border-bright: #333333;
     --text: #FFFFFF;
-    --text-dim: #A0A0A0;
-    --success: #00C853;
-    --error: #FF3D00;
-    --warning: #FFAB00;
+    --text-dim: #999999;
+    --text-muted: #666666;
+    --success: #00E676;
+    --error: #FF1744;
+    --warning: #FFC400;
+    --card-shadow: 0 8px 32px rgba(0,0,0,0.4);
 }
 
 * {
@@ -716,4 +721,81 @@ input:checked + .toggle-slider:before {
     padding: 40px;
     color: var(--text-dim);
     font-style: italic;
+}
+
+/* Toast Notifications */
+.toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 12px 24px;
+    border-radius: 8px;
+    color: white;
+    font-weight: 600;
+    transform: translateY(100px);
+    transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    z-index: 9999;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+
+.toast.show {
+    transform: translateY(0);
+}
+
+.toast-success { background: var(--success); }
+.toast-error { background: var(--error); }
+
+/* Buttons Enhancement */
+.btn-primary, .btn-save, #login-btn {
+    background: var(--primary-gradient);
+    transition: transform 0.2s, box-shadow 0.2s;
+    border: none;
+    cursor: pointer;
+}
+
+.btn-primary:hover, .btn-save:hover, #login-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px var(--primary-glow);
+}
+
+.btn-primary:active, .btn-save:active, #login-btn:active {
+    transform: translateY(0);
+}
+
+/* Card Enhancement */
+.card, .stat-card, .login-card, .order-card, .product-card, .category-card {
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    box-shadow: var(--card-shadow);
+    transition: border-color 0.3s;
+}
+
+.card:hover, .stat-card:hover, .order-card:hover {
+    border-color: var(--border-bright);
+}
+
+/* Sidebar Styling */
+.sidebar {
+    background-color: var(--surface);
+    border-right: 1px solid var(--border);
+}
+
+.nav-links li.active {
+    background: var(--primary-gradient);
+    color: white;
+}
+
+.nav-links li:not(.active):hover {
+    background-color: var(--surface-light);
+}
+
+/* Input Styling */
+input, textarea, select {
+    background-color: var(--surface-lighter);
+    border-color: var(--border);
+}
+
+input:focus, textarea:focus, select:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary-glow);
 }
