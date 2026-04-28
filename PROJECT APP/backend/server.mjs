@@ -269,9 +269,9 @@ async function ensureDatabase() {
         const defaultSettings = getFallbackSettings();
         await client.query(`
           INSERT INTO settings (
-            id, shop_latitude, shop_longitude, shop_whatsapp_number, minimum_order_amount, preparation_time_base, default_delivery_countdown_minutes, delivery_zones_json, promo_codes_json, hero_images_json, is_store_open, closed_message, updated_at
+            id, store_name, shop_address, shop_phone, shop_latitude, shop_longitude, shop_whatsapp_number, minimum_delivery_price, base_delivery_distance_km, extra_km_price, max_delivery_km, minimum_order_amount, preparation_time_base, default_delivery_countdown_minutes, delivery_zones_json, promo_codes_json, hero_images_json, is_store_open, closed_message, updated_at
           )
-          VALUES (1, $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, NOW())
+          VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18, NOW())
           ON CONFLICT (id) DO NOTHING
         `, [
           defaultSettings.storeName,
