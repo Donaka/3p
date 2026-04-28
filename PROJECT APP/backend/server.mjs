@@ -184,6 +184,8 @@ async function ensureDatabase() {
             address TEXT,
             latitude DOUBLE PRECISION,
             longitude DOUBLE PRECISION,
+            location_accuracy DOUBLE PRECISION,
+            location_timestamp TIMESTAMPTZ,
             distance_km NUMERIC(10, 2) NOT NULL DEFAULT 0,
             delivery_zone_radius NUMERIC(10, 2),
             accepted_at TIMESTAMPTZ,
@@ -213,6 +215,8 @@ async function ensureDatabase() {
         await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS accepted_until TIMESTAMPTZ;`);
         await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS preparing_until TIMESTAMPTZ;`);
         await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS estimated_delivery_minutes INTEGER;`);
+        await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS location_accuracy DOUBLE PRECISION;`);
+        await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS location_timestamp TIMESTAMPTZ;`);
         await client.query(`ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;`);
         await client.query(`
           ALTER TABLE orders
@@ -429,10 +433,11 @@ function normalizeOrderPayload(payload) {
   const firebaseUid = trimOrNull(payload.firebaseUid);
   const latitude = parseOptionalNumber(payload.latitude);
   const longitude = parseOptionalNumber(payload.longitude);
+  const locationAccuracy = parseOptionalNumber(payload.locationAccuracy);
+  const locationTimestamp = trimOrNull(payload.locationTimestamp);
   const total = parseMoney(payload.total, NaN);
   if (!customerPhone) throw new Error("Customer phone is required");
   if (!firebaseUid) throw new Error("Authenticated user is required");
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) throw new Error("Location is required");
   if (!items.length) throw new Error("Cart items are required");
   if (!Number.isFinite(total) || total <= 0) throw new Error("Total is required");
 
@@ -445,6 +450,8 @@ function normalizeOrderPayload(payload) {
     address: trimOrNull(payload.address),
     latitude,
     longitude,
+    locationAccuracy,
+    locationTimestamp,
     distanceKm: parseMoney(payload.distanceKm),
     deliveryZoneRadius: parseOptionalNumber(payload.deliveryZoneRadius),
     deliveryFee: parseMoney(payload.deliveryFee),
@@ -469,6 +476,8 @@ function mapOrderRow(row) {
     address: row.address,
     latitude: row.latitude === null ? null : Number(row.latitude),
     longitude: row.longitude === null ? null : Number(row.longitude),
+    locationAccuracy: row.location_accuracy === null ? null : Number(row.location_accuracy),
+    locationTimestamp: row.location_timestamp || null,
     distanceKm: Number(row.distance_km || 0),
     deliveryZoneRadius: row.delivery_zone_radius === null ? null : Number(row.delivery_zone_radius),
     acceptedAt: row.accepted_at || null,
@@ -1052,7 +1061,7 @@ async function createOrderRecord(order) {
       const orderResult = await client.query(`
         INSERT INTO orders (
           customer_name, customer_phone, customer_email, firebase_uid,
-          mode, address, latitude, longitude, distance_km, delivery_zone_radius, accepted_at, ready_at,
+          mode, address, latitude, longitude, location_accuracy, location_timestamp, distance_km, delivery_zone_radius, accepted_at, ready_at,
           accepted_until, preparing_until, estimated_delivery_minutes,
           delivery_fee, subtotal, discount, total, promo_code, whatsapp_message, status, customer_id
         )
@@ -1067,6 +1076,8 @@ async function createOrderRecord(order) {
         order.address,
         order.latitude,
         order.longitude,
+        order.locationAccuracy,
+        order.locationTimestamp,
         order.distanceKm,
         order.deliveryZoneRadius,
         pickupReadyAt,

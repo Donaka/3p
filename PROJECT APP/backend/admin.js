@@ -164,11 +164,20 @@ const admin = {
         const order = await this.api(`/api/orders/${id}`);
         let itemsHtml = order.items.map(i => `<li>${i.quantity}x ${i.productName} (${i.lineTotal} MAD)</li>`).join('');
         
+        let locationHtml = '';
+        if (order.mode === 'delivery' && order.latitude && order.longitude) {
+            locationHtml = `
+                <p><strong>Position GPS:</strong> ${order.latitude}, ${order.longitude} ${order.locationAccuracy ? `(±${Math.round(order.locationAccuracy)}m)` : ''}</p>
+                <p><strong>Google Maps:</strong> <a href="https://www.google.com/maps/search/?api=1&query=${order.latitude},${order.longitude}" target="_blank">Ouvrir dans Maps</a></p>
+            `;
+        }
+
         this.showModal(`Détails Commande #${id}`, `
             <div class="order-details">
                 <p><strong>Client:</strong> ${order.customerName}</p>
                 <p><strong>Téléphone:</strong> ${order.customerPhone}</p>
                 <p><strong>Adresse:</strong> ${order.address || 'N/A'}</p>
+                ${locationHtml}
                 <hr style="margin:15px 0; border:0; border-top:1px solid var(--border)">
                 <ul style="margin-bottom:15px">${itemsHtml}</ul>
                 <p><strong>TOTAL:</strong> ${order.total} MAD</p>
