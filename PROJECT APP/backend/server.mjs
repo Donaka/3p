@@ -1909,6 +1909,11 @@ app.get("/api/menu", asyncHandler(async (req, res) => {
   res.json(menu);
 }));
 
+app.get("/api/settings", asyncHandler(async (req, res) => {
+  const settings = await loadSettingsSafe();
+  res.json(settings);
+}));
+
 app.put("/api/settings", asyncHandler(async (req, res) => {
   if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
   const settings = await updateSettingsInDb(req.body);

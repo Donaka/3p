@@ -66,12 +66,31 @@ const admin = {
         };
         if (body) options.body = JSON.stringify(body);
 
-        const response = await fetch(path, options);
-        if (response.status === 401) {
-            this.logout();
-            throw new Error('Unauthorized');
+        try {
+            const response = await fetch(path, options);
+            
+            if (response.status === 401 && !path.includes('/check')) {
+                this.logout();
+                return;
+            }
+
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+                return await response.json();
+            }
+
+            const text = await response.text();
+            if (!response.ok) {
+                throw new Error(text || `Error ${response.status}`);
+            }
+            return text;
+        } catch (e) {
+            console.error('API Error:', path, e);
+            if (!path.includes('/check')) {
+                alert(`Erreur API: ${e.message}`);
+            }
+            throw e;
         }
-        return response.json();
     },
 
     async login() {
@@ -139,18 +158,25 @@ const admin = {
     },
 
     async loadDashboard() {
-        const stats = await this.api('/api/dashboard');
-        const settings = await this.api('/api/settings');
-        const tokens = await this.api('/api/device-tokens');
+        try {
+            const stats = await this.api('/api/dashboard');
+            const menu = await this.api('/api/menu');
+            const settings = menu.settings;
+            const tokens = await this.api('/api/device-tokens');
 
-        document.getElementById('stat-orders-today').textContent = stats.todayOrders;
-        document.getElementById('stat-revenue').textContent = `${stats.todayRevenue} MAD`;
-        document.getElementById('stat-pending').textContent = stats.pendingOrders;
-        document.getElementById('stat-devices').textContent = tokens.tokens.length;
+            document.getElementById('stat-orders-today').textContent = stats.todayOrders || 0;
+            document.getElementById('stat-revenue').textContent = `${stats.todayRevenue || 0} MAD`;
+            document.getElementById('stat-pending').textContent = stats.pendingOrders || 0;
+            document.getElementById('stat-devices').textContent = tokens.tokens?.length || 0;
 
-        const badge = document.getElementById('store-status-badge');
-        badge.textContent = settings.isStoreOpen ? 'BOUTIQUE OUVERTE' : 'BOUTIQUE FERMÉE';
-        badge.className = `badge ${settings.isStoreOpen ? 'open' : 'closed'}`;
+            const badge = document.getElementById('store-status-badge');
+            if (badge) {
+                badge.textContent = settings.isStoreOpen ? 'BOUTIQUE OUVERTE' : 'BOUTIQUE FERMÉE';
+                badge.className = `badge ${settings.isStoreOpen ? 'open' : 'closed'}`;
+            }
+        } catch (e) {
+            console.error('Dashboard load failed', e);
+        }
     },
 
     async loadOrders() {
@@ -219,10 +245,12 @@ const admin = {
     },
 
     async loadMenu() {
-        this.menu = await this.api('/api/menu');
+        const data = await this.api('/api/menu');
+        this.menu = data;
         this.renderCategories();
-        if (this.menu.categories.length > 0) {
-            this.renderProducts(this.menu.categories[0].name || this.menu.categories[0].id);
+        if (this.menu.categories && this.menu.categories.length > 0) {
+            const firstCat = this.menu.categories[0];
+            this.renderProducts(firstCat.name || firstCat);
         }
     },
 
@@ -508,6 +536,38 @@ const admin = {
             imageUrl: document.getElementById('c-img').value
         };
         await this.api('/api/menu/category', 'POST', body);
+        this.hideModal();
+        this.loadMenu();
+    },
+
+    editCategory(name) {
+        const cat = this.menu.categories.find(c => (c.name || c) === name);
+        const catName = typeof cat === 'object' ? cat.name : cat;
+        const catImg = typeof cat === 'object' ? (cat.imageUrl || '') : '';
+
+        this.showModal(`Modifier Catégorie: ${catName}`, `
+            <form class="admin-form">
+                <div class="form-row"><label>Nom de la catégorie</label><input type="text" id="c-edit-name" value="${catName}"></div>
+                <div class="form-row"><label>Image URL</label><input type="text" id="c-edit-img" value="${catImg}"></div>
+                <button type="button" class="btn-primary" style="width:100%" onclick="admin.updateCategory('${encodeURIComponent(catName)}')">Enregistrer</button>
+                <button type="button" style="width:100%; margin-top:10px; background:#500" onclick="admin.deleteCategory('${encodeURIComponent(catName)}')">Supprimer</button>
+            </form>
+        `);
+    },
+
+    async updateCategory(oldName) {
+        const body = {
+            name: document.getElementById('c-edit-name').value,
+            imageUrl: document.getElementById('c-edit-img').value
+        };
+        await this.api(`/api/menu/category/${oldName}`, 'PUT', body);
+        this.hideModal();
+        this.loadMenu();
+    },
+
+    async deleteCategory(name) {
+        if (!confirm('Supprimer cette catégorie et tous ses produits ?')) return;
+        await this.api(`/api/menu/category/${name}`, 'DELETE');
         this.hideModal();
         this.loadMenu();
     }
