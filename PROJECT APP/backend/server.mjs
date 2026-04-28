@@ -368,7 +368,37 @@ async function ensureDatabase() {
         await client.query(`
           CREATE INDEX IF NOT EXISTS device_tokens_phone_idx ON device_tokens(phone);
         `);
-        console.log("PostgreSQL schema ready: settings, menu_snapshots, orders, order_items, customers, notifications, device_tokens");
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS option_groups (
+            id BIGSERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            required BOOLEAN NOT NULL DEFAULT FALSE,
+            min_select INTEGER NOT NULL DEFAULT 0,
+            max_select INTEGER NOT NULL DEFAULT 1,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            active BOOLEAN NOT NULL DEFAULT TRUE
+          );
+        `);
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS option_items (
+            id BIGSERIAL PRIMARY KEY,
+            group_id BIGINT NOT NULL REFERENCES option_groups(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            price NUMERIC(12, 2) NOT NULL DEFAULT 0,
+            image_url TEXT,
+            available BOOLEAN NOT NULL DEFAULT TRUE,
+            sort_order INTEGER NOT NULL DEFAULT 0
+          );
+        `);
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS product_option_groups (
+            product_id TEXT NOT NULL,
+            group_id BIGINT NOT NULL REFERENCES option_groups(id) ON DELETE CASCADE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (product_id, group_id)
+          );
+        `);
+        console.log("PostgreSQL schema ready: settings, menu_snapshots, orders, order_items, customers, notifications, device_tokens, option_groups, option_items, product_option_groups");
       } finally {
         client.release();
       }
@@ -566,6 +596,31 @@ function mapCustomerSession(row) {
     photoURL: "",
     phone,
     provider: "phone-local"
+  };
+}
+
+function mapOptionGroupRow(row) {
+  return {
+    id: Number(row.id),
+    name: row.name,
+    required: Boolean(row.required),
+    minSelect: Number(row.min_select || 0),
+    maxSelect: Number(row.max_select || 1),
+    sortOrder: Number(row.sort_order || 0),
+    active: Boolean(row.active),
+    items: []
+  };
+}
+
+function mapOptionItemRow(row) {
+  return {
+    id: Number(row.id),
+    groupId: Number(row.group_id),
+    name: row.name,
+    price: Number(row.price || 0),
+    imageUrl: row.image_url || "",
+    available: Boolean(row.available),
+    sortOrder: Number(row.sort_order || 0)
   };
 }
 
@@ -866,27 +921,59 @@ async function loadSettingsSafe() {
 
 async function loadMenuFromDb() {
   return withDatabase(async () => {
-    const result = await dbPool.query(`
-      SELECT categories_json, products_json, updated_at
-      FROM menu_snapshots
-      WHERE id = 1
-      LIMIT 1
-    `);
-    const row = result.rows[0];
+    const [menuResult, groupsResult, assignmentsResult] = await Promise.all([
+      dbPool.query(`
+        SELECT categories_json, products_json, updated_at
+        FROM menu_snapshots
+        WHERE id = 1
+        LIMIT 1
+      `),
+      listOptionGroups(),
+      dbPool.query("SELECT * FROM product_option_groups ORDER BY sort_order ASC")
+    ]);
+
+    const row = menuResult.rows[0];
     if (!row) {
       const seedMenu = readMenu();
       return normalizeMenu(seedMenu);
     }
-    const normalized = normalizeMenu({
+
+    const menu = normalizeMenu({
       categories: row.categories_json || [],
       products: row.products_json || []
     });
-    console.log("Menu snapshot loaded from PostgreSQL", {
-      updatedAt: row.updated_at,
-      categoryCount: normalized.categories.length,
-      productCount: normalized.products.length
+
+    const assignments = assignmentsResult.rows;
+    menu.products.forEach(product => {
+      const productGroups = assignments
+        .filter(a => String(a.product_id) === String(product.id))
+        .map(a => groupsResult.find(g => Number(g.id) === Number(a.group_id)))
+        .filter(Boolean);
+
+      if (productGroups.length > 0) {
+        product.options = productGroups.map(g => ({
+          id: g.id,
+          name: g.name,
+          required: g.required,
+          minSelect: g.minSelect,
+          maxSelect: g.maxSelect,
+          items: g.items.map(i => ({
+            id: i.id,
+            name: i.name,
+            price: i.price,
+            imageUrl: i.imageUrl,
+            available: i.available
+          }))
+        }));
+      }
     });
-    return normalized;
+
+    console.log("Menu snapshot loaded from PostgreSQL with options", {
+      updatedAt: row.updated_at,
+      categoryCount: menu.categories.length,
+      productCount: menu.products.length
+    });
+    return menu;
   });
 }
 
@@ -1586,6 +1673,147 @@ async function upsertDeviceToken({ firebaseUid = "", phone = "", platform = "and
   });
 }
 
+async function listOptionGroups() {
+  return withDatabase(async () => {
+    const [groupsResult, itemsResult] = await Promise.all([
+      dbPool.query("SELECT * FROM option_groups ORDER BY sort_order ASC, id ASC"),
+      dbPool.query("SELECT * FROM option_items ORDER BY sort_order ASC, id ASC")
+    ]);
+    
+    const groups = groupsResult.rows.map(mapOptionGroupRow);
+    const items = itemsResult.rows.map(mapOptionItemRow);
+    
+    groups.forEach(group => {
+      group.items = items.filter(item => item.groupId === group.id);
+    });
+    
+    return groups;
+  });
+}
+
+async function listProductOptionGroups(productId) {
+  return withDatabase(async () => {
+    const result = await dbPool.query(`
+      SELECT og.*
+      FROM option_groups og
+      JOIN product_option_groups pog ON pog.group_id = og.id
+      WHERE pog.product_id = $1
+      ORDER BY pog.sort_order ASC
+    `, [productId]);
+    return result.rows.map(mapOptionGroupRow);
+  });
+}
+
+async function createOptionGroup(data) {
+  return withDatabase(async () => {
+    const result = await dbPool.query(`
+      INSERT INTO option_groups (name, required, min_select, max_select, sort_order, active)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [
+      data.name,
+      Boolean(data.required),
+      Number(data.minSelect || 0),
+      Number(data.maxSelect || 1),
+      Number(data.sortOrder || 0),
+      data.active !== false
+    ]);
+    return mapOptionGroupRow(result.rows[0]);
+  });
+}
+
+async function updateOptionGroup(id, data) {
+  return withDatabase(async () => {
+    const result = await dbPool.query(`
+      UPDATE option_groups
+      SET name = $2, required = $3, min_select = $4, max_select = $5, sort_order = $6, active = $7
+      WHERE id = $1
+      RETURNING *
+    `, [
+      id,
+      data.name,
+      Boolean(data.required),
+      Number(data.minSelect || 0),
+      Number(data.maxSelect || 1),
+      Number(data.sortOrder || 0),
+      data.active !== false
+    ]);
+    return result.rows[0] ? mapOptionGroupRow(result.rows[0]) : null;
+  });
+}
+
+async function deleteOptionGroup(id) {
+  return withDatabase(async () => {
+    await dbPool.query("DELETE FROM option_groups WHERE id = $1", [id]);
+    return { success: true };
+  });
+}
+
+async function createOptionItem(groupId, data) {
+  return withDatabase(async () => {
+    const result = await dbPool.query(`
+      INSERT INTO option_items (group_id, name, price, image_url, available, sort_order)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [
+      groupId,
+      data.name,
+      Number(data.price || 0),
+      data.imageUrl || "",
+      data.available !== false,
+      Number(data.sortOrder || 0)
+    ]);
+    return mapOptionItemRow(result.rows[0]);
+  });
+}
+
+async function updateOptionItem(id, data) {
+  return withDatabase(async () => {
+    const result = await dbPool.query(`
+      UPDATE option_items
+      SET name = $2, price = $3, image_url = $4, available = $5, sort_order = $6
+      WHERE id = $1
+      RETURNING *
+    `, [
+      id,
+      data.name,
+      Number(data.price || 0),
+      data.imageUrl || "",
+      data.available !== false,
+      Number(data.sortOrder || 0)
+    ]);
+    return result.rows[0] ? mapOptionItemRow(result.rows[0]) : null;
+  });
+}
+
+async function deleteOptionItem(id) {
+  return withDatabase(async () => {
+    await dbPool.query("DELETE FROM option_items WHERE id = $1", [id]);
+    return { success: true };
+  });
+}
+
+async function assignOptionGroupToProduct(productId, groupId, sortOrder = 0) {
+  return withDatabase(async () => {
+    await dbPool.query(`
+      INSERT INTO product_option_groups (product_id, group_id, sort_order)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (product_id, group_id) DO UPDATE SET sort_order = EXCLUDED.sort_order
+    `, [productId, groupId, sortOrder]);
+    return { success: true };
+  });
+}
+
+async function unassignOptionGroupFromProduct(productId, groupId) {
+  return withDatabase(async () => {
+    await dbPool.query(`
+      DELETE FROM product_option_groups
+      WHERE product_id = $1 AND group_id = $2
+    `, [productId, groupId]);
+    return { success: true };
+  });
+}
+
 async function getDashboardStats() {
   return withDatabase(async () => {
     const menu = await loadMenuSafe();
@@ -1895,6 +2123,64 @@ app.get("/api/dashboard", asyncHandler(async (req, res) => {
   if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
   const stats = await getDashboardStats();
   res.json(stats);
+}));
+
+app.get("/api/options", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  const options = await listOptionGroups();
+  res.json({ groups: options });
+}));
+
+app.post("/api/options/groups", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  const group = await createOptionGroup(req.body);
+  res.status(201).json(group);
+}));
+
+app.put("/api/options/groups/:id", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  const group = await updateOptionGroup(Number(req.params.id), req.body);
+  if (!group) return res.status(404).json({ error: "Not found" });
+  res.json(group);
+}));
+
+app.delete("/api/options/groups/:id", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  await deleteOptionGroup(Number(req.params.id));
+  res.json({ success: true });
+}));
+
+app.post("/api/options/groups/:id/items", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  const item = await createOptionItem(Number(req.params.id), req.body);
+  res.status(201).json(item);
+}));
+
+app.put("/api/options/items/:id", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  const item = await updateOptionItem(Number(req.params.id), req.body);
+  if (!item) return res.status(404).json({ error: "Not found" });
+  res.json(item);
+}));
+
+app.delete("/api/options/items/:id", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  await deleteOptionItem(Number(req.params.id));
+  res.json({ success: true });
+}));
+
+app.post("/api/options/assign", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { productId, groupId, sortOrder } = req.body;
+  await assignOptionGroupToProduct(productId, Number(groupId), Number(sortOrder || 0));
+  res.json({ success: true });
+}));
+
+app.delete("/api/options/assign", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  const { productId, groupId } = req.body;
+  await unassignOptionGroupFromProduct(productId, Number(groupId));
+  res.json({ success: true });
 }));
 
 app.get("/api/device-tokens", asyncHandler(async (req, res) => {

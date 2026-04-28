@@ -153,6 +153,7 @@ const admin = {
             case 'orders': this.loadOrders(); break;
             case 'menu': this.loadMenu(); break;
             case 'settings': this.loadSettings(); break;
+            case 'options': this.loadOptions(); break;
             case 'push': this.loadPushInfo(); break;
         }
     },
@@ -570,6 +571,230 @@ const admin = {
         await this.api(`/api/menu/category/${name}`, 'DELETE');
         this.hideModal();
         this.loadMenu();
+    },
+
+    async loadOptions() {
+        try {
+            const data = await this.api('/api/options');
+            const menu = await this.api('/api/menu');
+            this.allProducts = menu.products;
+            this.renderOptions(data.groups);
+        } catch (e) {
+            console.error('Failed to load options', e);
+        }
+    },
+
+    renderOptions(groups) {
+        const container = document.getElementById('options-container');
+        if (!groups || groups.length === 0) {
+            container.innerHTML = '<p class="empty-msg">Aucun groupe d\'options défini.</p>';
+            return;
+        }
+
+        container.innerHTML = groups.map(group => `
+            <div class="option-group-card" id="group-${group.id}">
+                <div class="option-group-header">
+                    <div class="option-group-info">
+                        <h3>${group.name}</h3>
+                        <div class="option-group-badges">
+                            ${group.required ? '<span class="badge status-badge status-new">OBLIGATOIRE</span>' : '<span class="badge-outline">OPTIONNEL</span>'}
+                            <span class="badge-outline">Min: ${group.minSelect}</span>
+                            <span class="badge-outline">Max: ${group.maxSelect}</span>
+                        </div>
+                    </div>
+                    <div class="option-group-actions">
+                        <button class="btn-sm" onclick="admin.showEditOptionGroupModal(${group.id})">✏️ Modifier</button>
+                        <button class="btn-sm btn-primary" onclick="admin.showAddOptionItemModal(${group.id})">+ Option</button>
+                        <button class="btn-sm" style="background:#500; color:white" onclick="admin.deleteOptionGroup(${group.id})">🗑️</button>
+                    </div>
+                </div>
+                <div class="option-group-content">
+                    <div class="option-items-list">
+                        ${group.items.length > 0 ? group.items.map(item => `
+                            <div class="option-item-row">
+                                <div class="option-item-info">
+                                    ${item.imageUrl ? `<img src="${item.imageUrl}" class="option-item-img">` : ''}
+                                    <span class="option-item-name">${item.name}</span>
+                                    <span class="option-item-price">+ ${item.price} MAD</span>
+                                    ${!item.available ? '<span class="status-badge status-cancelled">INDISPONIBLE</span>' : ''}
+                                </div>
+                                <div class="option-item-actions">
+                                    <button class="btn-sm" onclick="admin.showEditOptionItemModal(${group.id}, ${item.id})">✏️</button>
+                                    <button class="btn-sm" style="background:#500; color:white" onclick="admin.deleteOptionItem(${item.id})">🗑️</button>
+                                </div>
+                            </div>
+                        `).join('') : '<p class="empty-msg">Aucune option dans ce groupe.</p>'}
+                    </div>
+                    
+                    <div class="affected-products">
+                        <h4>Produits affectés</h4>
+                        <div class="product-tag-list" id="assigned-products-${group.id}">
+                            ${this.renderAssignedProducts(group.id)}
+                            <button class="btn-sm" onclick="admin.showAssignProductModal(${group.id})">+ Affecter</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    },
+
+    renderAssignedProducts(groupId) {
+        const assigned = this.allProducts.filter(p => p.options?.some(o => Number(o.id) === Number(groupId)));
+        return assigned.map(p => `
+            <div class="product-tag">
+                ${p.name}
+                <span class="remove-tag" onclick="admin.unassignOptionGroup('${p.id}', ${groupId})">&times;</span>
+            </div>
+        `).join('');
+    },
+
+    showAddOptionGroupModal() {
+        this.showModal('Ajouter un Groupe d\'Options', `
+            <form id="add-option-group-form" class="admin-form">
+                <div class="form-row"><label>Nom du groupe (ex: CHOIX SAUCE)</label><input type="text" id="og-name" required></div>
+                <div class="form-row">
+                    <label>Obligatoire</label>
+                    <div class="toggle-container">
+                        <input type="checkbox" id="og-required">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </div>
+                <div class="form-row"><label>Sélections Min</label><input type="number" id="og-min" value="0"></div>
+                <div class="form-row"><label>Sélections Max</label><input type="number" id="og-max" value="1"></div>
+                <div class="form-row"><label>Ordre d'affichage</label><input type="number" id="og-sort" value="0"></div>
+                <button type="button" class="btn-primary" style="width:100%" onclick="admin.saveOptionGroup()">Enregistrer le groupe</button>
+            </form>
+        `);
+    },
+
+    async saveOptionGroup(id = null) {
+        const body = {
+            name: document.getElementById('og-name').value,
+            required: document.getElementById('og-required').checked,
+            minSelect: parseInt(document.getElementById('og-min').value),
+            maxSelect: parseInt(document.getElementById('og-max').value),
+            sortOrder: parseInt(document.getElementById('og-sort').value)
+        };
+        
+        if (id) {
+            await this.api(`/api/options/groups/${id}`, 'PUT', body);
+        } else {
+            await this.api('/api/options/groups', 'POST', body);
+        }
+        this.hideModal();
+        this.loadOptions();
+    },
+
+    async showEditOptionGroupModal(id) {
+        const data = await this.api('/api/options');
+        const group = data.groups.find(g => g.id === id);
+        this.showModal('Modifier le Groupe', `
+            <form class="admin-form">
+                <div class="form-row"><label>Nom du groupe</label><input type="text" id="og-name" value="${group.name}"></div>
+                <div class="form-row">
+                    <label>Obligatoire</label>
+                    <div class="toggle-container">
+                        <input type="checkbox" id="og-required" ${group.required ? 'checked' : ''}>
+                        <span class="toggle-slider"></span>
+                    </div>
+                </div>
+                <div class="form-row"><label>Sélections Min</label><input type="number" id="og-min" value="${group.minSelect}"></div>
+                <div class="form-row"><label>Sélections Max</label><input type="number" id="og-max" value="${group.maxSelect}"></div>
+                <div class="form-row"><label>Ordre d'affichage</label><input type="number" id="og-sort" value="${group.sortOrder}"></div>
+                <button type="button" class="btn-primary" style="width:100%" onclick="admin.saveOptionGroup(${id})">Mettre à jour</button>
+            </form>
+        `);
+    },
+
+    async deleteOptionGroup(id) {
+        if (!confirm('Supprimer ce groupe et toutes ses options ?')) return;
+        await this.api(`/api/options/groups/${id}`, 'DELETE');
+        this.loadOptions();
+    },
+
+    showAddOptionItemModal(groupId) {
+        this.showModal('Ajouter une Option', `
+            <form class="admin-form">
+                <div class="form-row"><label>Nom de l'option (ex: Sauce BBQ)</label><input type="text" id="oi-name" required></div>
+                <div class="form-row"><label>Prix Supplémentaire (MAD)</label><input type="number" id="oi-price" value="0"></div>
+                <div class="form-row"><label>Image URL</label><input type="text" id="oi-img"></div>
+                <div class="form-row"><label>Ordre d'affichage</label><input type="number" id="oi-sort" value="0"></div>
+                <button type="button" class="btn-primary" style="width:100%" onclick="admin.saveOptionItem(${groupId})">Ajouter l'option</button>
+            </form>
+        `);
+    },
+
+    async saveOptionItem(groupId, itemId = null) {
+        const body = {
+            name: document.getElementById('oi-name').value,
+            price: parseFloat(document.getElementById('oi-price').value),
+            imageUrl: document.getElementById('oi-img').value,
+            sortOrder: parseInt(document.getElementById('oi-sort').value)
+        };
+        
+        if (itemId) {
+            await this.api(`/api/options/items/${itemId}`, 'PUT', body);
+        } else {
+            await this.api(`/api/options/groups/${groupId}/items`, 'POST', body);
+        }
+        this.hideModal();
+        this.loadOptions();
+    },
+
+    async showEditOptionItemModal(groupId, itemId) {
+        const data = await this.api('/api/options');
+        const group = data.groups.find(g => g.id === groupId);
+        const item = group.items.find(i => i.id === itemId);
+        this.showModal('Modifier l\'Option', `
+            <form class="admin-form">
+                <div class="form-row"><label>Nom de l'option</label><input type="text" id="oi-name" value="${item.name}"></div>
+                <div class="form-row"><label>Prix Supplémentaire</label><input type="number" id="oi-price" value="${item.price}"></div>
+                <div class="form-row"><label>Image URL</label><input type="text" id="oi-img" value="${item.imageUrl || ''}"></div>
+                <div class="form-row"><label>Ordre d'affichage</label><input type="number" id="oi-sort" value="${item.sortOrder}"></div>
+                <button type="button" class="btn-primary" style="width:100%" onclick="admin.saveOptionItem(${groupId}, ${itemId})">Mettre à jour</button>
+                <button type="button" style="width:100%; margin-top:10px; background:#555; color:white" onclick="admin.toggleOptionItem(${itemId}, ${!item.available})">${item.available ? 'Rendre Indisponible' : 'Rendre Disponible'}</button>
+            </form>
+        `);
+    },
+
+    async toggleOptionItem(id, available) {
+        await this.api(`/api/options/items/${id}`, 'PUT', { available });
+        this.hideModal();
+        this.loadOptions();
+    },
+
+    async deleteOptionItem(id) {
+        if (!confirm('Supprimer cette option ?')) return;
+        await this.api(`/api/options/items/${id}`, 'DELETE');
+        this.loadOptions();
+    },
+
+    showAssignProductModal(groupId) {
+        const unassigned = this.allProducts.filter(p => !p.options?.some(o => Number(o.id) === Number(groupId)));
+        this.showModal('Affecter à des Produits', `
+            <div class="admin-form">
+                <div class="form-row">
+                    <label>Sélectionner un produit</label>
+                    <select id="assign-product-id">
+                        ${unassigned.map(p => `<option value="${p.id}">${p.name} (${p.category})</option>`).join('')}
+                    </select>
+                </div>
+                <button type="button" class="btn-primary" style="width:100%" onclick="admin.assignOptionGroup(${groupId})">Affecter</button>
+            </div>
+        `);
+    },
+
+    async assignOptionGroup(groupId) {
+        const productId = document.getElementById('assign-product-id').value;
+        await this.api('/api/options/assign', 'POST', { productId, groupId });
+        this.hideModal();
+        this.loadOptions();
+    },
+
+    async unassignOptionGroup(productId, groupId) {
+        if (!confirm('Retirer ce groupe d\'option de ce produit ?')) return;
+        await this.api('/api/options/assign', 'DELETE', { productId, groupId });
+        this.loadOptions();
     }
 };
 

@@ -35,6 +35,7 @@
                 <li data-tab="orders">Commandes</li>
                 <li data-tab="menu">Menu & Produits</li>
                 <li data-tab="settings">Paramètres</li>
+                <li data-tab="options">Options</li>
                 <li data-tab="push">Notifications</li>
             </ul>
             <div class="sidebar-footer">
@@ -250,6 +251,19 @@
                     <button type="submit" class="btn-push">🚀 Envoyer la notification</button>
                 </form>
                 <div id="push-result" class="push-result hidden"></div>
+            </section>
+            
+            <!-- Options Tab -->
+            <section id="options-tab" class="tab-content">
+                <header class="tab-header">
+                    <h2>Gestion des Options</h2>
+                    <div class="header-actions">
+                        <button class="btn-primary" onclick="admin.showAddOptionGroupModal()">+ Ajouter un Groupe</button>
+                    </div>
+                </header>
+                <div id="options-container" class="options-manager">
+                    <p class="empty-msg">Chargement des options...</p>
+                </div>
             </section>
         </main>
     </div>
