@@ -331,7 +331,7 @@ const admin = {
             const card = document.createElement('div');
             card.className = 'product-card';
             card.innerHTML = `
-                <img src="${p.imageUrl || 'logo-3p.png'}" class="product-img">
+                <img src="${p.thumbnailUrl || p.imageUrl || 'logo-3p.png'}" class="product-img">
                 <div class="product-info">
                     <h4>${p.name}</h4>
                     <p class="price">${p.price} MAD</p>
@@ -514,6 +514,7 @@ const admin = {
                 <div class="form-row"><label>Prix (MAD)</label><input type="number" id="p-price" required></div>
                 <div class="form-row"><label>Description</label><textarea id="p-desc"></textarea></div>
                 <div class="form-row"><label>Image URL</label><input type="text" id="p-img"></div>
+                <div class="form-row"><label>Thumbnail URL (400x400)</label><input type="text" id="p-thumb"></div>
                 <button type="button" class="btn-primary" style="width:100%" onclick="admin.saveNewProduct()">Ajouter le produit</button>
             </form>
         `);
@@ -526,6 +527,7 @@ const admin = {
             price: parseFloat(document.getElementById('p-price').value),
             desc: document.getElementById('p-desc').value,
             imageUrl: document.getElementById('p-img').value,
+            thumbnailUrl: document.getElementById('p-thumb').value,
             available: true
         };
         await this.api('/api/menu/product', 'POST', body);
@@ -541,6 +543,7 @@ const admin = {
                 <div class="form-row"><label>Prix</label><input type="number" id="p-price" value="${p.price}"></div>
                 <div class="form-row"><label>Description</label><textarea id="p-desc">${p.desc || ''}</textarea></div>
                 <div class="form-row"><label>Image URL</label><input type="text" id="p-img" value="${p.imageUrl || ''}"></div>
+                <div class="form-row"><label>Thumbnail URL</label><input type="text" id="p-thumb" value="${p.thumbnailUrl || ''}"></div>
                 <button type="button" class="btn-primary" style="width:100%" onclick="admin.updateProduct('${id}')">Enregistrer</button>
                 <button type="button" style="width:100%; margin-top:10px; background:#500" onclick="admin.deleteProduct('${id}')">Supprimer</button>
             </form>
@@ -552,7 +555,8 @@ const admin = {
             name: document.getElementById('p-name').value,
             price: parseFloat(document.getElementById('p-price').value),
             desc: document.getElementById('p-desc').value,
-            imageUrl: document.getElementById('p-img').value
+            imageUrl: document.getElementById('p-img').value,
+            thumbnailUrl: document.getElementById('p-thumb').value
         };
         await this.api(`/api/menu/product/${id}`, 'PUT', body);
         this.hideModal();
