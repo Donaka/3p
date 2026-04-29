@@ -15,8 +15,8 @@ const admin = {
     },
 
     bindEvents() {
-        document.getElementById('login-btn').addEventListener('click', () => this.login());
-        document.getElementById('logout-btn').addEventListener('click', () => this.logout());
+        document.getElementById('login-btn')?.addEventListener('click', () => this.login());
+        document.getElementById('logout-btn')?.addEventListener('click', () => this.logout());
         
         document.querySelectorAll('.nav-links li').forEach(li => {
             li.addEventListener('click', (e) => {
@@ -25,39 +25,22 @@ const admin = {
             });
         });
 
-        document.getElementById('order-status-filter').addEventListener('change', () => this.loadOrders());
-        document.getElementById('settings-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            this.saveSettings();
-        });
-        
-        // Settings Listeners
-        ['setting-min-delivery-price', 'setting-base-distance', 'setting-extra-km-price'].forEach(id => {
-            document.getElementById(id)?.addEventListener('input', () => this.updateDeliveryPreview());
-        });
+        document.querySelector('.close-modal')?.addEventListener('click', () => this.hideModal());
+    },
 
-        document.getElementById('map-search-btn')?.addEventListener('click', () => this.searchAddress());
-        document.getElementById('map-search-input')?.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                this.searchAddress();
-            }
-        });
-        document.getElementById('push-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            this.sendPush();
-        });
+    setText(id, value) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value;
+    },
 
-        document.getElementById('push-type').addEventListener('change', (e) => {
-            this.updatePushLinkOptions(e.target.value);
-        });
+    setVal(id, value) {
+        const el = document.getElementById(id);
+        if (el) el.value = value ?? '';
+    },
 
-        document.getElementById('push-link-id').addEventListener('change', (e) => {
-            this.autoFillPushImage(e.target.value);
-        });
-
-
-        document.querySelector('.close-modal').addEventListener('click', () => this.hideModal());
+    setCheck(id, value) {
+        const el = document.getElementById(id);
+        if (el) el.checked = !!value;
     },
 
     async api(path, method = 'GET', body = null) {
@@ -142,7 +125,7 @@ const admin = {
                 this.password = pwd;
                 localStorage.setItem('3p_admin_password', pwd);
                 this.showScreen('main-screen');
-                this.loadDashboard();
+                this.openTab('dashboard');
             } else {
                 alert('Mot de passe incorrect');
             }
@@ -162,7 +145,7 @@ const admin = {
             const data = await this.api('/api/admin/check', 'POST', { password: this.password });
             if (data.ok) {
                 this.showScreen('main-screen');
-                this.loadDashboard();
+                this.openTab('dashboard');
             } else {
                 this.logout();
             }
@@ -381,10 +364,10 @@ const admin = {
             const settings = menu.settings;
             const tokens = await this.api('/api/device-tokens');
 
-            document.getElementById('stat-orders-today').textContent = stats.todayOrders || 0;
-            document.getElementById('stat-revenue').textContent = `${stats.todayRevenue || 0} MAD`;
-            document.getElementById('stat-pending').textContent = stats.pendingOrders || 0;
-            document.getElementById('stat-devices').textContent = tokens.tokens?.length || 0;
+            this.setText('stat-orders-today', stats.todayOrders || 0);
+            this.setText('stat-revenue', `${stats.todayRevenue || 0} MAD`);
+            this.setText('stat-pending', stats.pendingOrders || 0);
+            this.setText('stat-devices', tokens.tokens?.length || 0);
 
             const badge = document.getElementById('store-status-badge');
             if (badge) {
@@ -401,7 +384,8 @@ const admin = {
     },
 
     async loadOrders(isPolling = false) {
-        const status = document.getElementById('order-status-filter').value;
+        const filterEl = document.getElementById('order-status-filter');
+        const status = filterEl ? filterEl.value : '';
         const data = await this.api(`/api/orders?status=${status}`);
         
         if (isPolling && data.orders.length > this.lastOrderCount) {
@@ -411,6 +395,7 @@ const admin = {
         this.lastOrderCount = data.orders.length;
 
         const tbody = document.querySelector('#orders-table tbody');
+        if (!tbody) return;
         tbody.innerHTML = '';
 
         data.orders.forEach(order => {
@@ -533,30 +518,32 @@ const admin = {
         console.log("Loading settings...");
         try {
             const settings = await this.api('/api/settings');
-            document.getElementById('setting-store-name').value = settings.storeName || '';
-            document.getElementById('setting-is-open').checked = settings.manualIsStoreOpen;
-            document.getElementById('setting-phone').value = settings.shopPhone || '';
-            document.getElementById('setting-whatsapp').value = settings.shopWhatsAppNumber || '';
-            document.getElementById('setting-address').value = settings.shopAddress || '';
-            document.getElementById('setting-closed-message').value = settings.closedMessage || '';
+            this.setVal('setting-store-name', settings.storeName);
+            this.setCheck('setting-is-open', settings.manualIsStoreOpen);
+            this.setVal('setting-phone', settings.shopPhone);
+            this.setVal('setting-whatsapp', settings.shopWhatsAppNumber);
+            this.setVal('setting-address', settings.shopAddress);
+            this.setVal('setting-closed-message', settings.closedMessage);
             
-            document.getElementById('setting-lat').value = settings.shopLatitude;
-            document.getElementById('setting-lng').value = settings.shopLongitude;
+            this.setVal('setting-lat', settings.shopLatitude);
+            this.setVal('setting-lng', settings.shopLongitude);
             
-            document.getElementById('setting-min-delivery-price').value = settings.minimumDeliveryPrice ?? 10;
-            document.getElementById('setting-base-distance').value = settings.baseDeliveryDistanceKm ?? 1;
-            document.getElementById('setting-extra-km-price').value = settings.extraKmPrice ?? 5;
-            document.getElementById('setting-max-distance').value = settings.maxDeliveryKm || '';
+            this.setVal('setting-min-delivery-price', settings.minimumDeliveryPrice ?? 10);
+            this.setVal('setting-base-distance', settings.baseDeliveryDistanceKm ?? 1);
+            this.setVal('setting-extra-km-price', settings.extraKmPrice ?? 5);
+            this.setVal('setting-max-distance', settings.maxDeliveryKm);
 
             // Auto Hours
-            document.getElementById('setting-auto-schedule').checked = settings.autoScheduleEnabled;
-            document.getElementById('setting-opening-time').value = settings.openingTime || '11:00';
-            document.getElementById('setting-closing-time').value = settings.closingTime || '03:00';
-            document.getElementById('setting-timezone').value = settings.timezone || 'Africa/Casablanca';
+            this.setCheck('setting-auto-schedule', settings.autoScheduleEnabled);
+            this.setVal('setting-opening-time', settings.openingTime || '11:00');
+            this.setVal('setting-closing-time', settings.closingTime || '03:00');
+            this.setVal('setting-timezone', settings.timezone || 'Africa/Casablanca');
             
             this.updateComputedStatusPreview(settings);
 
-            this.initMap(settings.shopLatitude, settings.shopLongitude);
+            if (document.getElementById('shop-map')) {
+                this.initMap(settings.shopLatitude, settings.shopLongitude);
+            }
             this.updateDeliveryPreview();
         } catch (e) {
             console.error("Failed to load settings", e);
