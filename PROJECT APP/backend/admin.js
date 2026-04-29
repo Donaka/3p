@@ -21,7 +21,7 @@ const admin = {
         document.querySelectorAll('.nav-links li').forEach(li => {
             li.addEventListener('click', (e) => {
                 const tab = e.currentTarget.getAttribute('data-tab');
-                this.switchTab(tab);
+                this.openTab(tab);
             });
         });
 
@@ -176,21 +176,36 @@ const admin = {
         document.getElementById(id).classList.add('active');
     },
 
-    switchTab(tab) {
+    openTab(tab) {
         this.currentTab = tab;
         document.querySelectorAll('.nav-links li').forEach(li => li.classList.remove('active'));
-        document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+        const navItem = document.querySelector(`[data-tab="${tab}"]`);
+        if (navItem) navItem.classList.add('active');
         
-        document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
-        document.getElementById(`${tab}-tab`).classList.add('active');
-
+        console.log("Opening tab:", tab);
+        
+        const mainContent = document.querySelector('main.content');
+        
         if (tab === 'orders') {
             this.startOrderPolling();
         } else {
             this.stopOrderPolling();
         }
 
-        console.log("Opening tab:", tab);
+        // Render tab skeleton/header immediately
+        switch(tab) {
+            case 'dashboard': mainContent.innerHTML = this.renderDashboardTab(); break;
+            case 'orders': mainContent.innerHTML = this.renderOrdersTab(); break;
+            case 'menu': mainContent.innerHTML = this.renderMenuTab(); break;
+            case 'settings': mainContent.innerHTML = this.renderSettingsTab(); break;
+            case 'options': mainContent.innerHTML = this.renderOptionsTab(); break;
+            case 'push': mainContent.innerHTML = this.renderNotificationsTab(); break;
+        }
+
+        // Re-bind events for the new HTML
+        this.bindTabEvents(tab);
+
+        // Load data
         switch(tab) {
             case 'dashboard': this.loadDashboard(); break;
             case 'orders': this.loadOrders(); break;
@@ -199,6 +214,164 @@ const admin = {
             case 'options': this.loadOptions(); break;
             case 'push': this.loadPushInfo(); break;
         }
+    },
+
+    bindTabEvents(tab) {
+        if (tab === 'orders') {
+            document.getElementById('order-status-filter')?.addEventListener('change', () => this.loadOrders());
+        }
+        if (tab === 'settings') {
+            document.getElementById('settings-form')?.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.saveSettings();
+            });
+            ['setting-min-delivery-price', 'setting-base-distance', 'setting-extra-km-price'].forEach(id => {
+                document.getElementById(id)?.addEventListener('input', () => this.updateDeliveryPreview());
+            });
+            document.getElementById('map-search-btn')?.addEventListener('click', () => this.searchAddress());
+            document.getElementById('map-search-input')?.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); this.searchAddress(); }
+            });
+        }
+        if (tab === 'push') {
+            document.getElementById('push-form')?.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.sendPush();
+            });
+            document.getElementById('push-type')?.addEventListener('change', (e) => {
+                this.updatePushLinkOptions(e.target.value);
+            });
+        }
+    },
+
+    renderDashboardTab() {
+        return `
+            <header class="tab-header">
+                <h1>Tableau de bord</h1>
+                <div id="store-status-badge" class="badge">Chargement...</div>
+            </header>
+            <div class="stats-grid">
+                <div class="stat-card"><h3>Commandes (Aujourd'hui)</h3><p id="stat-orders-today">0</p></div>
+                <div class="stat-card"><h3>Chiffre d'affaires</h3><p id="stat-revenue">0 MAD</p></div>
+                <div class="stat-card"><h3>Commandes en attente</h3><p id="stat-pending">0</p></div>
+                <div class="stat-card"><h3>Appareils enregistrés</h3><p id="stat-devices">0</p></div>
+            </div>
+        `;
+    },
+
+    renderOrdersTab() {
+        return `
+            <header class="tab-header">
+                <h1>Gestion des Commandes</h1>
+                <div class="filters">
+                    <select id="order-status-filter">
+                        <option value="">Tous les statuts</option>
+                        <option value="new">Nouvelles</option>
+                        <option value="accepted">Acceptées</option>
+                        <option value="preparing">En préparation</option>
+                        <option value="ready">Prêtes</option>
+                        <option value="delivered">Livrées</option>
+                        <option value="cancelled">Annulées</option>
+                    </select>
+                </div>
+            </header>
+            <div class="table-container">
+                <table id="orders-table">
+                    <thead><tr><th>ID</th><th>Client</th><th>Mode</th><th>Total</th><th>Statut</th><th>Action</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        `;
+    },
+
+    renderMenuTab() {
+        return `
+            <header class="tab-header">
+                <h1>Menu & Produits</h1>
+                <div class="header-actions">
+                    <button class="primary-btn" onclick="admin.showAddCategoryModal()">+ Catégorie</button>
+                    <button class="primary-btn" onclick="admin.showAddProductModal()">+ Produit</button>
+                </div>
+            </header>
+            <div class="menu-manager">
+                <div class="categories-list" id="categories-container"></div>
+                <div class="products-list" id="products-container"></div>
+            </div>
+        `;
+    },
+
+    renderSettingsTab() {
+        // We'll keep this simplified for now but ensure it has all IDs
+        return `
+            <header class="tab-header"><h1>Paramètres du Restaurant</h1></header>
+            <form id="settings-form" class="admin-form">
+                <div class="settings-grid">
+                    <div class="form-section">
+                        <h3>Informations Boutique</h3>
+                        <div class="form-row"><label>Nom de la boutique</label><input type="text" id="setting-store-name"></div>
+                        <div class="form-row"><label>Boutique Ouverte (Manuel)</label><input type="checkbox" id="setting-is-open"></div>
+                        <div class="form-row"><label>Téléphone</label><input type="text" id="setting-phone"></div>
+                        <div class="form-row"><label>WhatsApp</label><input type="text" id="setting-whatsapp"></div>
+                        <div class="form-row"><label>Adresse</label><textarea id="setting-address"></textarea></div>
+                        <div class="form-row"><label>Message de fermeture</label><textarea id="setting-closed-message"></textarea></div>
+                    </div>
+                    <div class="form-section">
+                        <h3>Horaires automatiques</h3>
+                        <div class="form-row"><label>Activer auto-schedule</label><input type="checkbox" id="setting-auto-schedule"></div>
+                        <div class="form-row"><label>Ouverture</label><input type="time" id="setting-opening-time"></div>
+                        <div class="form-row"><label>Fermeture</label><input type="time" id="setting-closing-time"></div>
+                        <div class="form-row"><label>Fuseau horaire</label><select id="setting-timezone"><option value="Africa/Casablanca">Maroc</option><option value="UTC">UTC</option></select></div>
+                        <div class="status-preview">Statut actuel: <div id="setting-computed-status" class="badge">--</div></div>
+                    </div>
+                    <div class="form-section">
+                        <h3>Localisation GPS</h3>
+                        <div class="map-search-container"><input type="text" id="map-search-input"><button type="button" id="map-search-btn">🔍</button></div>
+                        <div id="shop-map" style="height:300px; background:#222; border-radius:10px; margin:10px 0;"></div>
+                        <div class="coord-inputs"><input type="number" id="setting-lat" step="any"><input type="number" id="setting-lng" step="any"></div>
+                    </div>
+                    <div class="form-section">
+                        <h3>Livraison</h3>
+                        <div class="form-row"><label>Prix Min</label><input type="number" id="setting-min-delivery-price"></div>
+                        <div class="form-row"><label>Base (km)</label><input type="number" id="setting-base-distance"></div>
+                        <div class="form-row"><label>Prix extra (MAD/km)</label><input type="number" id="setting-extra-km-price"></div>
+                        <div class="form-row"><label>Max (km)</label><input type="number" id="setting-max-distance"></div>
+                        <div class="delivery-preview"><table><thead><tr><th>Dist</th><th>Prix</th></tr></thead><tbody id="delivery-preview-body"></tbody></table></div>
+                    </div>
+                </div>
+                <button type="submit" class="primary-btn" style="width:100%; margin-top:20px;">🚀 Enregistrer les paramètres</button>
+            </form>
+        `;
+    },
+
+    renderOptionsTab() {
+        return `
+            <header class="tab-header">
+                <h1>Gestion des Options</h1>
+                <div class="header-actions">
+                    <button class="primary-btn" onclick="admin.showAddOptionGroupModal()">+ Ajouter un Groupe</button>
+                </div>
+            </header>
+            <div id="options-container" class="options-manager"><p class="empty-msg">Chargement des options...</p></div>
+        `;
+    },
+
+    renderNotificationsTab() {
+        return `
+            <header class="tab-header">
+                <h1>Notifications Push</h1>
+                <p id="push-device-count">Chargement des appareils...</p>
+            </header>
+            <form id="push-form" class="admin-form">
+                <div class="form-row"><label>Titre</label><input type="text" id="push-title" placeholder="Titre"></div>
+                <div class="form-row"><label>Message</label><textarea id="push-body" placeholder="Message"></textarea></div>
+                <div class="form-row"><label>Son 3P</label><input type="checkbox" id="push-custom-sound" checked></div>
+                <div class="form-row"><label>Cible</label><select id="push-target"><option value="ALL">Tous</option></select></div>
+                <div class="form-row"><label>Image URL</label><input type="url" id="push-image-url"></div>
+                <div class="form-row"><label>Type</label><select id="push-type"><option value="home">Accueil</option><option value="product">Produit</option><option value="category">Catégorie</option><option value="order">Commande</option></select></div>
+                <div class="form-row" id="push-link-container" style="display:none;"><label>Cible spécifique</label><div id="push-link-select-wrapper"></div></div>
+                <button type="submit" id="send-push-btn" class="primary-btn" style="width:100%; margin-top:20px;">🚀 Envoyer la notification</button>
+            </form>
+        `;
     },
 
     async loadDashboard() {
