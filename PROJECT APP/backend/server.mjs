@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import express from "express";
 import cors from "cors";
+import crypto from "node:crypto";
+
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const __dirname = root;
@@ -13,6 +15,12 @@ const menuPath = process.env.MENU_DATA_PATH || join(root, "data", "menu.json");
 const seedMenuPath = join(root, "data", "menu.seed.json");
 const adminPassword = process.env.ADMIN_PASSWORD || "";
 const databaseUrl = process.env.DATABASE_URL || "";
+
+// Infobip configuration
+const INFOBIP_API_KEY = process.env.INFOBIP_API_KEY || "fe427475b151cca4ac1d5b8cc1882657-1dcdd0f7-08a6-44a8-8920-3ccff7a24d6f";
+const INFOBIP_BASE_URL = process.env.INFOBIP_BASE_URL || "https://55ejqz.api.infobip.com";
+const INFOBIP_SMS_FROM = process.env.INFOBIP_SMS_FROM || "3P";
+const OTP_CHANNEL = process.env.OTP_CHANNEL || "sms";
 
 const app = express();
 app.use(cors());
@@ -414,6 +422,18 @@ async function ensureDatabase() {
           );
         `);
         await client.query(`CREATE INDEX IF NOT EXISTS otp_codes_phone_idx ON otp_codes(phone);`);
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS phone_otps (
+            id BIGSERIAL PRIMARY KEY,
+            phone TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            verified BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+        `);
+        await client.query(`CREATE INDEX IF NOT EXISTS phone_otps_phone_idx ON phone_otps(phone);`);
         console.log("PostgreSQL schema ready: settings, menu_snapshots, orders, order_items, customers, notifications, device_tokens, option_groups, option_items, product_option_groups");
       } finally {
         client.release();
@@ -448,8 +468,27 @@ function trimOrNull(value) {
   return trimmed || null;
 }
 
-function normalizePhone(value) {
-  return String(value ?? "").replace(/[^\d]/g, "").trim();
+function normalizePhone(phone) {
+  if (!phone) return "";
+  let cleaned = String(phone).replace(/\D/g, "");
+  // Standard normalization for search/storage
+  if (cleaned.startsWith("06") && cleaned.length === 10) return "212" + cleaned.slice(1);
+  if (cleaned.startsWith("07") && cleaned.length === 10) return "212" + cleaned.slice(1);
+  if (cleaned.startsWith("0") && !cleaned.startsWith("00")) cleaned = cleaned.slice(1);
+  return cleaned;
+}
+
+function normalizeMoroccoPhone(phone) {
+  if (!phone) return "";
+  let cleaned = String(phone).replace(/\D/g, "");
+  if (cleaned.startsWith("06") && cleaned.length === 10) return "212" + cleaned.slice(1);
+  if (cleaned.startsWith("07") && cleaned.length === 10) return "212" + cleaned.slice(1);
+  if (cleaned.startsWith("212") && cleaned.length === 12) return cleaned;
+  return cleaned;
+}
+
+function hashOTP(code) {
+  return crypto.createHash("sha256").update(String(code)).digest("hex");
 }
 
 function normalizeSettings(settings = {}) {
@@ -2331,50 +2370,104 @@ app.post("/api/customer-auth", asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-app.post("/api/otp/send", asyncHandler(async (req, res) => {
+async function sendInfobipSMS(to, message) {
+  const url = `${INFOBIP_BASE_URL}/sms/2/text/advanced`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": `App ${INFOBIP_API_KEY}`,
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    },
+    body: JSON.stringify({
+      messages: [
+        {
+          destinations: [{ to }],
+          from: INFOBIP_SMS_FROM,
+          text: message
+        }
+      ]
+    })
+  });
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error("Infobip SMS Error:", errorText);
+    throw new Error(`Infobip error: ${response.status}`);
+  }
+  return await response.json();
+}
+
+app.post("/api/auth/phone/start", asyncHandler(async (req, res) => {
   const { phone } = req.body;
-  if (!phone) return res.status(400).json({ error: "Phone required" });
+  if (!phone) return res.status(400).json({ error: "Numéro de téléphone requis" });
   
+  const normalized = normalizeMoroccoPhone(phone);
+  if (!normalized || normalized.length < 10) {
+    return res.status(400).json({ error: "Numéro de téléphone invalide" });
+  }
+
   const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
-  
+  const codeHash = hashOTP(code);
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
+
   await withDatabase(async () => {
-    await dbPool.query("DELETE FROM otp_codes WHERE phone = $1", [phone]);
+    // Rate limit check: last OTP sent < 60 seconds ago
+    const lastOtp = await dbPool.query(
+      "SELECT created_at FROM phone_otps WHERE phone = $1 AND created_at > NOW() - INTERVAL '60 seconds' LIMIT 1",
+      [normalized]
+    );
+    if (lastOtp.rows.length > 0) {
+      throw new Error("Veuillez attendre 60 secondes avant de demander un nouveau code");
+    }
+
     await dbPool.query(
-      "INSERT INTO otp_codes (phone, code, expires_at) VALUES ($1, $2, $3)",
-      [phone, code, expiresAt]
+      "INSERT INTO phone_otps (phone, code_hash, expires_at) VALUES ($1, $2, $3)",
+      [normalized, codeHash, expiresAt]
     );
   });
 
-  console.log(`[OTP] Sent ${code} to ${phone}`);
-  // In production, integrate with Twilio/Infobip here
-  res.json({ success: true, message: "Code sent" });
+  const message = `Votre code 3P Chicken Pops est ${code}. Il expire dans 5 minutes.`;
+  await sendInfobipSMS(normalized, message);
+  
+  console.log(`[OTP] Sent to ${normalized}`);
+  res.json({ ok: true });
 }));
 
-app.post("/api/otp/verify", asyncHandler(async (req, res) => {
+app.post("/api/auth/phone/verify", asyncHandler(async (req, res) => {
   const { phone, code, name } = req.body;
-  if (!phone || !code) return res.status(400).json({ error: "Phone and code required" });
+  if (!phone || !code) return res.status(400).json({ error: "Téléphone et code requis" });
+
+  const normalized = normalizeMoroccoPhone(phone);
+  const codeHash = hashOTP(code);
 
   const result = await withDatabase(async () => {
     const resOtp = await dbPool.query(
-      "SELECT * FROM otp_codes WHERE phone = $1 AND code = $2 AND expires_at > NOW() AND verified = FALSE LIMIT 1",
-      [phone, code]
+      "SELECT * FROM phone_otps WHERE phone = $1 AND expires_at > NOW() AND verified = FALSE AND attempts < 5 ORDER BY created_at DESC LIMIT 1",
+      [normalized]
     );
     
-    if (resOtp.rows.length === 0) return { error: "Invalid or expired code" };
+    if (resOtp.rows.length === 0) {
+      throw new Error("Code invalide ou expiré");
+    }
     
-    await dbPool.query("UPDATE otp_codes SET verified = TRUE WHERE id = $1", [resOtp.rows[0].id]);
+    const otpRecord = resOtp.rows[0];
+    if (otpRecord.code_hash !== codeHash) {
+      await dbPool.query("UPDATE phone_otps SET attempts = attempts + 1 WHERE id = $1", [otpRecord.id]);
+      throw new Error("Code incorrect");
+    }
     
-    // Auto-authenticate
+    await dbPool.query("UPDATE phone_otps SET verified = TRUE WHERE id = $1", [otpRecord.id]);
+    
+    // Auto-authenticate/Upsert customer
     return await authenticateCustomer({
-      phone,
+      phone: normalized,
       name: name || "",
       provider: "phone"
     });
   });
 
-  if (result.error) return res.status(400).json({ error: result.error });
-  res.json(result);
+  res.json({ ok: true, customer: result });
 }));
 
 app.post("/api/users/upsert", asyncHandler(async (req, res) => {
