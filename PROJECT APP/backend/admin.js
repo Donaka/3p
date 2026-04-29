@@ -349,7 +349,21 @@ const admin = {
             container.appendChild(card);
         });
     },
-
+    async loadSettings() {
+        const settings = await this.api('/api/settings');
+        document.getElementById('setting-store-name').value = settings.storeName || '';
+        document.getElementById('setting-is-open').checked = settings.manualIsStoreOpen;
+        document.getElementById('setting-phone').value = settings.shopPhone || '';
+        document.getElementById('setting-whatsapp').value = settings.shopWhatsAppNumber || '';
+        document.getElementById('setting-address').value = settings.shopAddress || '';
+        document.getElementById('setting-closed-message').value = settings.closedMessage || '';
+        
+        document.getElementById('setting-lat').value = settings.shopLatitude;
+        document.getElementById('setting-lng').value = settings.shopLongitude;
+        
+        document.getElementById('setting-min-delivery-price').value = settings.minimumDeliveryPrice ?? 10;
+        document.getElementById('setting-base-distance').value = settings.baseDeliveryDistanceKm ?? 1;
+        document.getElementById('setting-extra-km-price').value = settings.extraKmPrice ?? 5;
         document.getElementById('setting-max-distance').value = settings.maxDeliveryKm || '';
 
         // Auto Hours
@@ -446,7 +460,16 @@ const admin = {
             tbody.appendChild(tr);
         });
     },
-
+    async saveSettings() {
+        const body = {
+            storeName: document.getElementById('setting-store-name').value,
+            isStoreOpen: document.getElementById('setting-is-open').checked,
+            shopPhone: document.getElementById('setting-phone').value,
+            shopWhatsAppNumber: document.getElementById('setting-whatsapp').value,
+            shopAddress: document.getElementById('setting-address').value,
+            closedMessage: document.getElementById('setting-closed-message').value,
+            shopLatitude: parseFloat(document.getElementById('setting-lat').value),
+            shopLongitude: parseFloat(document.getElementById('setting-lng').value),
             minimumDeliveryPrice: parseFloat(document.getElementById('setting-min-delivery-price').value),
             baseDeliveryDistanceKm: parseFloat(document.getElementById('setting-base-distance').value),
             extraKmPrice: parseFloat(document.getElementById('setting-extra-km-price').value),
@@ -467,7 +490,7 @@ const admin = {
     },
 
     async sendPush() {
-        const btn = document.querySelector('.btn-push');
+        const btn = document.getElementById('send-push-btn');
         btn.disabled = true;
         btn.textContent = 'Envoi en cours...';
 
@@ -807,8 +830,8 @@ const admin = {
                 <div class="form-row"><label>Prix Supplémentaire</label><input type="number" id="oi-price" value="${item.price}"></div>
                 <div class="form-row"><label>Image URL</label><input type="text" id="oi-img" value="${item.imageUrl || ''}"></div>
                 <div class="form-row"><label>Ordre d'affichage</label><input type="number" id="oi-sort" value="${item.sortOrder}"></div>
-                <button type="button" class="btn-primary" style="width:100%" onclick="admin.saveOptionItem(${groupId}, ${itemId})">Mettre à jour</button>
-                <button type="button" style="width:100%; margin-top:10px; background:#555; color:white" onclick="admin.toggleOptionItem(${itemId}, ${!item.available})">${item.available ? 'Rendre Indisponible' : 'Rendre Disponible'}</button>
+                <button type="button" class="primary-btn" style="width:100%" onclick="admin.saveOptionItem(${groupId}, ${itemId})">Mettre à jour</button>
+                <button type="button" class="secondary-btn" style="width:100%; margin-top:10px" onclick="admin.toggleOptionItem(${itemId}, ${!item.available})">${item.available ? 'Rendre Indisponible' : 'Rendre Disponible'}</button>
             </form>
         `);
     },
@@ -835,7 +858,7 @@ const admin = {
                         ${unassigned.map(p => `<option value="${p.id}">${p.name} (${p.category})</option>`).join('')}
                     </select>
                 </div>
-                <button type="button" class="btn-primary" style="width:100%" onclick="admin.assignOptionGroup(${groupId})">Affecter</button>
+                <button type="button" class="primary-btn" style="width:100%" onclick="admin.assignOptionGroup(${groupId})">Affecter</button>
             </div>
         `);
     },
