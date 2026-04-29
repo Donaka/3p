@@ -560,6 +560,10 @@ const authenticateToken = (req, res, next) => {
 };
 
 function normalizeSettings(settings = {}) {
+  return {
+    storeName: String(settings.storeName || fallbackSettings.storeName).trim(),
+    shopAddress: String(settings.shopAddress || "").trim(),
+    shopPhone: String(settings.shopPhone || "").trim(),
     heroImages: (Array.isArray(settings.heroImages) ? settings.heroImages : [])
       .map(item => {
         if (typeof item === 'string') return { imageUrl: item, active: true };
