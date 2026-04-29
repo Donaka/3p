@@ -560,14 +560,21 @@ const authenticateToken = (req, res, next) => {
 };
 
 function normalizeSettings(settings = {}) {
-  const rawHeroImages = Array.isArray(settings.heroImages)
-    ? settings.heroImages
-    : [settings.heroImageUrl || ""];
-  return {
-    storeName: String(settings.storeName || fallbackSettings.storeName).trim(),
-    shopAddress: String(settings.shopAddress || "").trim(),
-    shopPhone: String(settings.shopPhone || "").trim(),
-    heroImages: rawHeroImages.map(item => String(item || "").trim()).filter(Boolean).slice(0, 5),
+    heroImages: (Array.isArray(settings.heroImages) ? settings.heroImages : [])
+      .map(item => {
+        if (typeof item === 'string') return { imageUrl: item, active: true };
+        return {
+          imageUrl: String(item.imageUrl || "").trim(),
+          title: String(item.title || "").trim(),
+          subtitle: String(item.subtitle || "").trim(),
+          actionType: ["none", "product", "category"].includes(item.actionType) ? item.actionType : "none",
+          productId: String(item.productId || "").trim(),
+          categoryId: String(item.categoryId || "").trim(),
+          active: item.active !== false
+        };
+      })
+      .filter(item => item.imageUrl)
+      .slice(0, 10),
     shopLatitude: Number(settings.shopLatitude) || fallbackSettings.shopLatitude,
     shopLongitude: Number(settings.shopLongitude) || fallbackSettings.shopLongitude,
     shopWhatsAppNumber: String(settings.shopWhatsAppNumber || fallbackSettings.shopWhatsAppNumber).replace(/[^\d]/g, "").trim() || fallbackSettings.shopWhatsAppNumber,
@@ -619,7 +626,7 @@ function normalizeOrderPayload(payload) {
     lineTotal: parseMoney(item.lineTotal)
   })).filter(item => item.productName && item.quantity > 0) : [];
 
-  const customerPhone = String(payload.customerPhone || "").trim();
+  const customerPhone = normalizeMoroccoPhone(payload.customerPhone);
   const customerId = payload.customerId || null;
   const latitude = parseOptionalNumber(payload.latitude);
   const longitude = parseOptionalNumber(payload.longitude);
@@ -1369,6 +1376,18 @@ async function createOrderRecord(order) {
         : null;
       const initialStatus = order.mode === "pickup" ? "accepted" : "new";
 
+      // Re-calculate delivery fee on backend for security
+      let deliveryFee = 0;
+      if (order.mode === "delivery") {
+        deliveryFee = settings.minimumDeliveryPrice || 10;
+        if (order.distanceKm > settings.baseDeliveryDistanceKm) {
+          deliveryFee += (order.distanceKm - settings.baseDeliveryDistanceKm) * (settings.extraKmPrice || 5);
+        }
+      }
+      
+      const subtotal = order.items.reduce((sum, i) => sum + i.lineTotal, 0);
+      const total = Math.max(0, subtotal + deliveryFee - (order.discount || 0));
+
       const orderResult = await client.query(`
         INSERT INTO orders (
           customer_name, customer_phone, customer_email, firebase_uid,
@@ -1394,10 +1413,10 @@ async function createOrderRecord(order) {
         pickupReadyAt,
         acceptedUntil,
         preparingUntil,
-        order.deliveryFee,
-        order.subtotal,
-        order.discount,
-        order.total,
+        deliveryFee,
+        subtotal,
+        order.discount || 0,
+        total,
         order.promoCode,
         order.whatsappMessage,
         initialStatus,
@@ -1434,7 +1453,9 @@ async function createOrderRecord(order) {
       }
 
       await client.query("COMMIT");
-      return { order: applyOrderTracking(savedOrder, activeOrders, settings.preparationTimeBase), customer: mapCustomerRow(customer) };
+      const finalOrder = applyOrderTracking(savedOrder, activeOrders, settings.preparationTimeBase);
+      console.log("Created order:", finalOrder.id, "for", finalOrder.customer_phone);
+      return { ok: true, order: finalOrder, customer: mapCustomerRow(customer) };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -1630,7 +1651,9 @@ async function listCustomerOrders({ firebaseUid = "", email = "", phone = "" } =
       conditions.push(`LOWER(COALESCE(o.customer_email, '')) = $${values.length}`);
     }
     if (phone) {
-      values.push(phone);
+      const normalizedPhone = normalizeMoroccoPhone(phone);
+      console.log("Fetch orders for:", normalizedPhone);
+      values.push(normalizedPhone);
       conditions.push(`o.customer_phone = $${values.length}`);
     }
     if (!conditions.length) {
@@ -2438,8 +2461,8 @@ app.post("/api/orders", authenticateToken, asyncHandler(async (req, res) => {
     });
   }
   const order = normalizeOrderPayload({ ...req.body, customerId: req.user.id });
-  const saved = await createOrderRecord(order);
-  res.status(201).json(saved);
+  const result = await createOrderRecord(order);
+  res.status(201).json(result);
 }));
 
 app.get("/api/orders/customer", asyncHandler(async (req, res) => {

@@ -902,3 +902,13 @@ input, textarea, select {
     font-size: 14px;
     color: var(--text-dim);
 }
+
+/* Hero Manager */
+.hero-manager { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
+.hero-card { background-color: var(--surface-light); border: 1px solid var(--border); border-radius: 12px; padding: 12px; display: flex; align-items: center; gap: 15px; transition: all 0.2s; }
+.hero-card:hover { border-color: var(--primary); background-color: var(--surface-lighter); }
+.hero-thumb { width: 80px; height: 50px; border-radius: 8px; object-fit: cover; background-color: #000; }
+.hero-info { flex: 1; }
+.hero-title { font-weight: 700; font-size: 15px; }
+.hero-subtitle { font-size: 12px; color: var(--text-dim); }
+.hero-actions { display: flex; gap: 8px; }

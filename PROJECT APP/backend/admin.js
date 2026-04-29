@@ -320,6 +320,13 @@ const admin = {
                         <div class="form-row"><label>Max (km)</label><input type="number" id="setting-max-distance"></div>
                         <div class="delivery-preview"><table><thead><tr><th>Dist</th><th>Prix</th></tr></thead><tbody id="delivery-preview-body"></tbody></table></div>
                     </div>
+                    <div class="form-section">
+                        <h3>Images Hero Accueil</h3>
+                        <div id="hero-images-container" class="hero-manager">
+                            <p class="empty-msg">Chargement...</p>
+                        </div>
+                        <button type="button" class="secondary-btn" style="width:100%; margin-top:10px;" onclick="admin.showAddHeroModal()">+ Ajouter une image hero</button>
+                    </div>
                 </div>
                 <button type="submit" class="primary-btn" style="width:100%; margin-top:20px;">🚀 Enregistrer les paramètres</button>
             </form>
@@ -544,6 +551,8 @@ const admin = {
             if (document.getElementById('shop-map')) {
                 this.initMap(settings.shopLatitude, settings.shopLongitude);
             }
+            this.renderHeroImagesList(settings.heroImages || []);
+            
             this.updateDeliveryPreview();
         } catch (e) {
             console.error("Failed to load settings", e);
@@ -634,25 +643,26 @@ const admin = {
         });
     },
     async saveSettings() {
-        const body = {
-            storeName: document.getElementById('setting-store-name').value,
+          const settings = {
+            storeName: this.getVal('setting-store-name'),
             isStoreOpen: document.getElementById('setting-is-open').checked,
-            shopPhone: document.getElementById('setting-phone').value,
-            shopWhatsAppNumber: document.getElementById('setting-whatsapp').value,
-            shopAddress: document.getElementById('setting-address').value,
-            closedMessage: document.getElementById('setting-closed-message').value,
-            shopLatitude: parseFloat(document.getElementById('setting-lat').value),
-            shopLongitude: parseFloat(document.getElementById('setting-lng').value),
-            minimumDeliveryPrice: parseFloat(document.getElementById('setting-min-delivery-price').value),
-            baseDeliveryDistanceKm: parseFloat(document.getElementById('setting-base-distance').value),
-            extraKmPrice: parseFloat(document.getElementById('setting-extra-km-price').value),
-            maxDeliveryKm: parseFloat(document.getElementById('setting-max-distance').value) || null,
+            shopPhone: this.getVal('setting-phone'),
+            shopWhatsAppNumber: this.getVal('setting-whatsapp'),
+            shopAddress: this.getVal('setting-address'),
+            closedMessage: this.getVal('setting-closed-message'),
+            shopLatitude: parseFloat(this.getVal('setting-lat')),
+            shopLongitude: parseFloat(this.getVal('setting-lng')),
+            minimumDeliveryPrice: parseFloat(this.getVal('setting-min-delivery-price')),
+            baseDeliveryDistanceKm: parseFloat(this.getVal('setting-base-distance')),
+            extraKmPrice: parseFloat(this.getVal('setting-extra-km-price')),
+            maxDeliveryKm: parseFloat(this.getVal('setting-max-distance')),
             autoScheduleEnabled: document.getElementById('setting-auto-schedule').checked,
-            openingTime: document.getElementById('setting-opening-time').value,
-            closingTime: document.getElementById('setting-closing-time').value,
-            timezone: document.getElementById('setting-timezone').value
+            openingTime: this.getVal('setting-opening-time'),
+            closingTime: this.getVal('setting-closing-time'),
+            timezone: this.getVal('setting-timezone'),
+            heroImages: this.currentHeroImages || []
         };
-        await this.api('/api/settings', 'PUT', body);
+        await this.api('/api/settings', 'PUT', settings);
         this.showToast('Paramètres enregistrés !');
         this.loadSettings();
     },
@@ -1104,6 +1114,105 @@ const admin = {
         if (!confirm('Retirer ce groupe d\'option de ce produit ?')) return;
         await this.api('/api/options/assign', 'DELETE', { productId, groupId });
         this.loadOptions();
+    },
+
+    renderHeroImagesList(images) {
+        this.currentHeroImages = images || [];
+        const container = document.getElementById('hero-images-container');
+        if (!container) return;
+        
+        if (this.currentHeroImages.length === 0) {
+            container.innerHTML = '<p class="empty-msg">Aucune image hero configurée</p>';
+            return;
+        }
+
+        container.innerHTML = this.currentHeroImages.map((img, index) => `
+            <div class="hero-card" style="display:flex; align-items:center; gap:12px; margin-bottom:12px; padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--surface-light)">
+                <img src="${img.imageUrl}" style="width:60px; height:40px; object-fit:cover; border-radius:4px">
+                <div style="flex-grow:1">
+                    <div style="font-weight:600">${img.title || 'Sans titre'}</div>
+                    <div style="font-size:11px; color:var(--text-dim)">${img.subtitle || ''}</div>
+                </div>
+                <div class="hero-actions" style="display:flex; gap:8px">
+                    <button class="secondary-btn btn-sm" onclick="admin.editHero(${index})">✏️</button>
+                    <button class="danger-btn btn-sm" onclick="admin.deleteHero(${index})">🗑️</button>
+                </div>
+            </div>
+        `).join('');
+    },
+
+    showAddHeroModal() {
+        this.showHeroModal();
+    },
+
+    editHero(index) {
+        this.showHeroModal(index);
+    },
+
+    deleteHero(index) {
+        if (confirm('Supprimer cette image hero ?')) {
+            this.currentHeroImages.splice(index, 1);
+            this.renderHeroImagesList(this.currentHeroImages);
+        }
+    },
+
+    showHeroModal(index = null) {
+        const isEdit = index !== null;
+        const hero = isEdit ? this.currentHeroImages[index] : { imageUrl: '', title: '', subtitle: '', actionType: 'none', active: true };
+        
+        this.showModal(`${isEdit ? 'Modifier' : 'Ajouter'} Image Hero`, `
+            <form id="hero-form" class="admin-form">
+                <div class="form-row">
+                    <label>URL Image</label>
+                    <input type="text" id="hero-url" value="${hero.imageUrl}" required>
+                </div>
+                <div class="form-row">
+                    <label>Titre</label>
+                    <input type="text" id="hero-title" value="${hero.title || ''}">
+                </div>
+                <div class="form-row">
+                    <label>Sous-titre</label>
+                    <input type="text" id="hero-subtitle" value="${hero.subtitle || ''}">
+                </div>
+                <div class="form-row">
+                    <label>Action</label>
+                    <select id="hero-action">
+                        <option value="none" ${hero.actionType === 'none' ? 'selected' : ''}>Aucune</option>
+                        <option value="product" ${hero.actionType === 'product' ? 'selected' : ''}>Produit</option>
+                        <option value="category" ${hero.actionType === 'category' ? 'selected' : ''}>Catégorie</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label>ID Cible (Product ID / Category Name)</label>
+                    <input type="text" id="hero-target" value="${hero.productId || hero.categoryId || ''}">
+                </div>
+                <button type="submit" class="primary-btn" style="width:100%">${isEdit ? 'Mettre à jour' : 'Ajouter'}</button>
+            </form>
+        `);
+        
+        document.getElementById('hero-form').onsubmit = (e) => {
+            e.preventDefault();
+            const newHero = {
+                imageUrl: document.getElementById('hero-url').value,
+                title: document.getElementById('hero-title').value,
+                subtitle: document.getElementById('hero-subtitle').value,
+                actionType: document.getElementById('hero-action').value,
+                active: true
+            };
+            
+            const target = document.getElementById('hero-target').value;
+            if (newHero.actionType === 'product') newHero.productId = target;
+            if (newHero.actionType === 'category') newHero.categoryId = target;
+
+            if (isEdit) {
+                this.currentHeroImages[index] = newHero;
+            } else {
+                this.currentHeroImages.push(newHero);
+            }
+            
+            this.renderHeroImagesList(this.currentHeroImages);
+            this.hideModal();
+        };
     }
 };
 
