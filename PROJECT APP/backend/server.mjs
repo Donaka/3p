@@ -2452,7 +2452,7 @@ async function handleNotifyRequest(payload) {
     },
     android: { 
       notification: { 
-        sound: payload.useCustomSound ? "3p_notification" : "default", 
+        sound: payload.useCustomSound ? "p_notification" : "default", 
         imageUrl: payload.imageUrl || imageUrl,
         channelId: "3p_orders",
         icon: "notification_icon",
@@ -2462,7 +2462,7 @@ async function handleNotifyRequest(payload) {
     apns: {
       payload: {
         aps: {
-          sound: payload.useCustomSound ? "3p-notification.wav" : "default",
+          sound: payload.useCustomSound ? "p_notification.wav" : "default",
           "mutable-content": 1
         }
       },

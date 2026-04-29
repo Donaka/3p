@@ -49,7 +49,7 @@ messaging.onBackgroundMessage(function(payload) {
       ...(payload.data || {}),
       url: payload.data?.url || '/'
     },
-    tag: payload.data?.tag || '3p-notification',
+    tag: payload.data?.tag || 'p_notification',
     renotify: true
   };
 
