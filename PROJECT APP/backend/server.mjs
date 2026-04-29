@@ -7,6 +7,7 @@ import express from "express";
 import cors from "cors";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
+import { DateTime } from "luxon";
 
 
 const root = fileURLToPath(new URL(".", import.meta.url));
@@ -148,6 +149,10 @@ const fallbackSettings = {
   deliveryZones: [],
   promoCodes: [],
   isStoreOpen: true,
+  autoScheduleEnabled: true,
+  openingTime: "11:00",
+  closingTime: "03:00",
+  timezone: "Africa/Casablanca",
   closedMessage: "Nous sommes fermes actuellement. Merci de revenir pendant nos horaires d'ouverture."
 };
 
@@ -260,6 +265,10 @@ async function ensureDatabase() {
             promo_codes_json JSONB NOT NULL DEFAULT '[]'::jsonb,
             hero_images_json JSONB NOT NULL DEFAULT '[]'::jsonb,
             is_store_open BOOLEAN NOT NULL DEFAULT TRUE,
+            auto_schedule_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            opening_time TEXT NOT NULL DEFAULT '11:00',
+            closing_time TEXT NOT NULL DEFAULT '03:00',
+            timezone TEXT NOT NULL DEFAULT 'Africa/Casablanca',
             closed_message TEXT NOT NULL DEFAULT 'Nous sommes fermes actuellement. Merci de revenir pendant nos horaires d''ouverture.',
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           );
@@ -276,13 +285,17 @@ async function ensureDatabase() {
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS preparation_time_base INTEGER NOT NULL DEFAULT 20;`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS default_delivery_countdown_minutes INTEGER NOT NULL DEFAULT 30;`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS is_store_open BOOLEAN NOT NULL DEFAULT TRUE;`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_schedule_enabled BOOLEAN NOT NULL DEFAULT TRUE;`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS opening_time TEXT NOT NULL DEFAULT '11:00';`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS closing_time TEXT NOT NULL DEFAULT '03:00';`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'Africa/Casablanca';`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS closed_message TEXT NOT NULL DEFAULT 'Nous sommes fermes actuellement. Merci de revenir pendant nos horaires d''ouverture.';`);
         const defaultSettings = getFallbackSettings();
         await client.query(`
           INSERT INTO settings (
-            id, store_name, shop_address, shop_phone, shop_latitude, shop_longitude, shop_whatsapp_number, minimum_delivery_price, base_delivery_distance_km, extra_km_price, max_delivery_km, minimum_order_amount, preparation_time_base, default_delivery_countdown_minutes, delivery_zones_json, promo_codes_json, hero_images_json, is_store_open, closed_message, updated_at
+            id, store_name, shop_address, shop_phone, shop_latitude, shop_longitude, shop_whatsapp_number, minimum_delivery_price, base_delivery_distance_km, extra_km_price, max_delivery_km, minimum_order_amount, preparation_time_base, default_delivery_countdown_minutes, delivery_zones_json, promo_codes_json, hero_images_json, is_store_open, auto_schedule_enabled, opening_time, closing_time, timezone, closed_message, updated_at
           )
-          VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18, NOW())
+          VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18, $19, $20, $21, $22, NOW())
           ON CONFLICT (id) DO NOTHING
         `, [
           defaultSettings.storeName,
@@ -302,6 +315,10 @@ async function ensureDatabase() {
           JSON.stringify(defaultSettings.promoCodes),
           JSON.stringify(defaultSettings.heroImages),
           defaultSettings.isStoreOpen,
+          defaultSettings.autoScheduleEnabled,
+          defaultSettings.openingTime,
+          defaultSettings.closingTime,
+          defaultSettings.timezone,
           defaultSettings.closedMessage
         ]);
         await client.query(`
@@ -501,6 +518,24 @@ function hashOTP(code) {
   return crypto.createHash("sha256").update(String(code)).digest("hex");
 }
 
+function isStoreOpenComputed(settings) {
+  if (!settings.autoScheduleEnabled) {
+    return settings.isStoreOpen;
+  }
+
+  const { openingTime, closingTime, timezone } = settings;
+  const now = DateTime.now().setZone(timezone || "Africa/Casablanca");
+  const currentTime = now.toFormat('HH:mm');
+
+  if (closingTime < openingTime) {
+    // Overnight: e.g., 11:00 to 03:00
+    return currentTime >= openingTime || currentTime <= closingTime;
+  } else {
+    // Same day: e.g., 08:00 to 20:00
+    return currentTime >= openingTime && currentTime <= closingTime;
+  }
+}
+
 function generateToken(customer) {
   return jwt.sign({ 
     id: customer.id, 
@@ -559,6 +594,10 @@ function normalizeSettings(settings = {}) {
       })).filter(promo => promo.code && promo.value > 0).slice(0, 20)
       : [],
     isStoreOpen: settings.isStoreOpen !== false,
+    autoScheduleEnabled: settings.autoScheduleEnabled !== false,
+    openingTime: String(settings.openingTime || fallbackSettings.openingTime).trim(),
+    closingTime: String(settings.closingTime || fallbackSettings.closingTime).trim(),
+    timezone: String(settings.timezone || fallbackSettings.timezone).trim(),
     closedMessage: String(settings.closedMessage || fallbackSettings.closedMessage).trim() || fallbackSettings.closedMessage
   };
 }
@@ -898,6 +937,10 @@ function mapSettingsRow(row) {
     deliveryZones: Array.isArray(row?.delivery_zones_json) ? row.delivery_zones_json : [],
     promoCodes: Array.isArray(row?.promo_codes_json) ? row.promo_codes_json : [],
     isStoreOpen: row?.is_store_open,
+    autoScheduleEnabled: row?.auto_schedule_enabled,
+    openingTime: row?.opening_time,
+    closingTime: row?.closing_time,
+    timezone: row?.timezone,
     closedMessage: row?.closed_message
   });
 }
@@ -950,9 +993,10 @@ async function updateSettingsInDb(settings) {
             id, store_name, shop_address, shop_phone, shop_latitude, shop_longitude, shop_whatsapp_number,
             minimum_delivery_price, base_delivery_distance_km, extra_km_price, max_delivery_km,
             minimum_order_amount, preparation_time_base, default_delivery_countdown_minutes,
-            delivery_zones_json, promo_codes_json, hero_images_json, is_store_open, closed_message, updated_at
+            delivery_zones_json, promo_codes_json, hero_images_json, is_store_open, 
+            auto_schedule_enabled, opening_time, closing_time, timezone, closed_message, updated_at
           )
-          VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18, NOW())
+          VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18, $19, $20, $21, $22, NOW())
           ON CONFLICT (id) DO UPDATE SET
             store_name = EXCLUDED.store_name,
             shop_address = EXCLUDED.shop_address,
@@ -971,6 +1015,10 @@ async function updateSettingsInDb(settings) {
             promo_codes_json = EXCLUDED.promo_codes_json,
             hero_images_json = EXCLUDED.hero_images_json,
             is_store_open = EXCLUDED.is_store_open,
+            auto_schedule_enabled = EXCLUDED.auto_schedule_enabled,
+            opening_time = EXCLUDED.opening_time,
+            closing_time = EXCLUDED.closing_time,
+            timezone = EXCLUDED.timezone,
             closed_message = EXCLUDED.closed_message,
             updated_at = NOW()
           RETURNING *
@@ -992,6 +1040,10 @@ async function updateSettingsInDb(settings) {
           JSON.stringify(normalized.promoCodes),
           JSON.stringify(normalized.heroImages),
           normalized.isStoreOpen,
+          normalized.autoScheduleEnabled,
+          normalized.openingTime,
+          normalized.closingTime,
+          normalized.timezone,
           normalized.closedMessage
         ]);
     console.log("Settings saved to PostgreSQL", {
@@ -1005,9 +1057,24 @@ async function updateSettingsInDb(settings) {
 
 async function loadSettingsSafe() {
   try {
-    return await loadSettingsFromDb();
-  } catch {
-    return getFallbackSettings();
+    const settings = await loadSettingsFromDb();
+    const computedOpen = isStoreOpenComputed(settings);
+    return {
+      ...settings,
+      manualIsStoreOpen: settings.isStoreOpen,
+      computedIsStoreOpen: computedOpen,
+      isStoreOpen: settings.autoScheduleEnabled ? computedOpen : settings.isStoreOpen
+    };
+  } catch (error) {
+    console.error("loadSettingsSafe error:", error);
+    const settings = getFallbackSettings();
+    const computedOpen = isStoreOpenComputed(settings);
+    return {
+      ...settings,
+      manualIsStoreOpen: settings.isStoreOpen,
+      computedIsStoreOpen: computedOpen,
+      isStoreOpen: settings.autoScheduleEnabled ? computedOpen : settings.isStoreOpen
+    };
   }
 }
 

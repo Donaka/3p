@@ -214,8 +214,12 @@ const admin = {
 
             const badge = document.getElementById('store-status-badge');
             if (badge) {
-                badge.textContent = settings.isStoreOpen ? 'BOUTIQUE OUVERTE' : 'BOUTIQUE FERMÉE';
-                badge.className = `badge ${settings.isStoreOpen ? 'open' : 'closed'}`;
+                const isOpen = settings.autoScheduleEnabled ? settings.computedIsStoreOpen : settings.isStoreOpen;
+                const isAuto = settings.autoScheduleEnabled;
+                badge.textContent = isOpen 
+                    ? (isAuto ? 'OUVERT (AUTO)' : 'BOUTIQUE OUVERTE') 
+                    : (isAuto ? 'FERMÉ (AUTO)' : 'BOUTIQUE FERMÉE');
+                badge.className = `badge ${isOpen ? 'open' : 'closed'}`;
             }
         } catch (e) {
             console.error('Dashboard load failed', e);
@@ -243,7 +247,7 @@ const admin = {
                 <td>${order.mode === 'delivery' ? '🚗' : '🥡'}</td>
                 <td><strong>${order.total} MAD</strong></td>
                 <td><span class="status-badge status-${order.status}">${order.status.toUpperCase()}</span></td>
-                <td><button class="btn-primary btn-sm" onclick="admin.viewOrder(${order.id})">Gérer</button></td>
+                <td><button class="primary-btn btn-sm" onclick="admin.viewOrder(${order.id})">Gérer</button></td>
             `;
             tbody.appendChild(tr);
         });
@@ -282,7 +286,7 @@ const admin = {
                     <option value="delivered" ${order.status === 'delivered' ? 'selected' : ''}>Livré</option>
                     <option value="cancelled" ${order.status === 'cancelled' ? 'selected' : ''}>Annulé</option>
                 </select>
-                <button class="btn-primary" style="width:100%; margin-top:20px" onclick="admin.updateOrderStatus(${id})">Mettre à jour</button>
+                <button class="primary-btn" style="width:100%; margin-top:20px" onclick="admin.updateOrderStatus(${id})">Mettre à jour</button>
             </div>
         `);
     },
@@ -311,7 +315,7 @@ const admin = {
             const name = cat.name || cat;
             const div = document.createElement('div');
             div.className = 'category-item';
-            div.innerHTML = `<span>${name}</span> <button class="btn-sm" onclick="admin.editCategory('${name}')">✏️</button>`;
+            div.innerHTML = `<span>${name}</span> <button class="secondary-btn btn-sm icon-btn" onclick="admin.editCategory('${name}')">✏️</button>`;
             div.onclick = (e) => {
                 if (e.target.tagName === 'BUTTON') return;
                 document.querySelectorAll('.category-item').forEach(i => i.classList.remove('active'));
@@ -337,8 +341,8 @@ const admin = {
                     <p class="price">${p.price} MAD</p>
                     <p style="font-size:12px; color:var(--text-dim)">${p.desc?.substring(0, 50) || ''}...</p>
                     <div class="product-actions">
-                        <button class="btn-primary btn-sm" onclick="admin.editProduct('${p.id}')">Modifier</button>
-                        <button class="btn-sm" style="background:#555; color:white" onclick="admin.toggleProduct('${p.id}')">${p.available ? 'Masquer' : 'Afficher'}</button>
+                        <button class="primary-btn btn-sm" onclick="admin.editProduct('${p.id}')">Modifier</button>
+                        <button class="secondary-btn btn-sm" onclick="admin.toggleProduct('${p.id}')">${p.available ? 'Masquer' : 'Afficher'}</button>
                     </div>
                 </div>
             `;
@@ -346,22 +350,15 @@ const admin = {
         });
     },
 
-    async loadSettings() {
-        const settings = await this.api('/api/settings');
-        document.getElementById('setting-store-name').value = settings.storeName || '';
-        document.getElementById('setting-is-open').checked = settings.isStoreOpen;
-        document.getElementById('setting-phone').value = settings.shopPhone || '';
-        document.getElementById('setting-whatsapp').value = settings.shopWhatsAppNumber || '';
-        document.getElementById('setting-address').value = settings.shopAddress || '';
-        document.getElementById('setting-closed-message').value = settings.closedMessage || '';
-        
-        document.getElementById('setting-lat').value = settings.shopLatitude;
-        document.getElementById('setting-lng').value = settings.shopLongitude;
-        
-        document.getElementById('setting-min-delivery-price').value = settings.minimumDeliveryPrice ?? 10;
-        document.getElementById('setting-base-distance').value = settings.baseDeliveryDistanceKm ?? 1;
-        document.getElementById('setting-extra-km-price').value = settings.extraKmPrice ?? 5;
         document.getElementById('setting-max-distance').value = settings.maxDeliveryKm || '';
+
+        // Auto Hours
+        document.getElementById('setting-auto-schedule').checked = settings.autoScheduleEnabled;
+        document.getElementById('setting-opening-time').value = settings.openingTime || '11:00';
+        document.getElementById('setting-closing-time').value = settings.closingTime || '03:00';
+        document.getElementById('setting-timezone').value = settings.timezone || 'Africa/Casablanca';
+        
+        this.updateComputedStatusPreview(settings);
 
         this.initMap(settings.shopLatitude, settings.shopLongitude);
         this.updateDeliveryPreview();
@@ -420,6 +417,15 @@ const admin = {
         }
     },
 
+    updateComputedStatusPreview(settings) {
+        const badge = document.getElementById('setting-computed-status');
+        if (!badge) return;
+        
+        const isOpen = settings.computedIsStoreOpen;
+        badge.textContent = isOpen ? 'OUVERT' : 'FERMÉ';
+        badge.className = `badge ${isOpen ? 'open' : 'closed'}`;
+    },
+
     updateDeliveryPreview() {
         const minPrice = parseFloat(document.getElementById('setting-min-delivery-price').value) || 0;
         const baseDist = parseFloat(document.getElementById('setting-base-distance').value) || 0;
@@ -441,23 +447,18 @@ const admin = {
         });
     },
 
-    async saveSettings() {
-        const body = {
-            storeName: document.getElementById('setting-store-name').value,
-            isStoreOpen: document.getElementById('setting-is-open').checked,
-            shopPhone: document.getElementById('setting-phone').value,
-            shopWhatsAppNumber: document.getElementById('setting-whatsapp').value,
-            shopAddress: document.getElementById('setting-address').value,
-            closedMessage: document.getElementById('setting-closed-message').value,
-            shopLatitude: parseFloat(document.getElementById('setting-lat').value),
-            shopLongitude: parseFloat(document.getElementById('setting-lng').value),
             minimumDeliveryPrice: parseFloat(document.getElementById('setting-min-delivery-price').value),
             baseDeliveryDistanceKm: parseFloat(document.getElementById('setting-base-distance').value),
             extraKmPrice: parseFloat(document.getElementById('setting-extra-km-price').value),
-            maxDeliveryKm: parseFloat(document.getElementById('setting-max-distance').value) || null
+            maxDeliveryKm: parseFloat(document.getElementById('setting-max-distance').value) || null,
+            autoScheduleEnabled: document.getElementById('setting-auto-schedule').checked,
+            openingTime: document.getElementById('setting-opening-time').value,
+            closingTime: document.getElementById('setting-closing-time').value,
+            timezone: document.getElementById('setting-timezone').value
         };
         await this.api('/api/settings', 'PUT', body);
-        alert('Paramètres enregistrés !');
+        this.showToast('Paramètres enregistrés !');
+        this.loadSettings();
     },
 
     async loadPushInfo() {
@@ -515,7 +516,7 @@ const admin = {
                 <div class="form-row"><label>Description</label><textarea id="p-desc"></textarea></div>
                 <div class="form-row"><label>Image URL</label><input type="text" id="p-img"></div>
                 <div class="form-row"><label>Thumbnail URL (Optimisée)</label><input type="text" id="p-thumb" placeholder="Optionnel"></div>
-                <button type="button" class="btn-primary" style="width:100%" onclick="admin.saveNewProduct()">Ajouter le produit</button>
+                <button type="button" class="primary-btn" style="width:100%" onclick="admin.saveNewProduct()">Ajouter le produit</button>
             </form>
         `);
     },
@@ -544,8 +545,8 @@ const admin = {
                 <div class="form-row"><label>Description</label><textarea id="p-desc">${p.desc || ''}</textarea></div>
                 <div class="form-row"><label>Image URL</label><input type="text" id="p-img" value="${p.imageUrl || ''}"></div>
                 <div class="form-row"><label>Thumbnail URL</label><input type="text" id="p-thumb" value="${p.thumbnailUrl || ''}"></div>
-                <button type="button" class="btn-primary" style="width:100%" onclick="admin.updateProduct('${id}')">Enregistrer</button>
-                <button type="button" style="width:100%; margin-top:10px; background:#500" onclick="admin.deleteProduct('${id}')">Supprimer</button>
+                <button type="button" class="primary-btn" style="width:100%" onclick="admin.updateProduct('${id}')">Enregistrer</button>
+                <button type="button" class="danger-btn" style="width:100%; margin-top:10px" onclick="admin.deleteProduct('${id}')">Supprimer</button>
             </form>
         `);
     },
@@ -581,7 +582,7 @@ const admin = {
             <form class="admin-form">
                 <div class="form-row"><label>Nom</label><input type="text" id="c-name" required></div>
                 <div class="form-row"><label>Image URL</label><input type="text" id="c-img"></div>
-                <button type="button" class="btn-primary" style="width:100%" onclick="admin.saveNewCategory()">Ajouter</button>
+                <button type="button" class="primary-btn" style="width:100%" onclick="admin.saveNewCategory()">Ajouter</button>
             </form>
         `);
     },
@@ -605,8 +606,8 @@ const admin = {
             <form class="admin-form">
                 <div class="form-row"><label>Nom de la catégorie</label><input type="text" id="c-edit-name" value="${catName}"></div>
                 <div class="form-row"><label>Image URL</label><input type="text" id="c-edit-img" value="${catImg}"></div>
-                <button type="button" class="btn-primary" style="width:100%" onclick="admin.updateCategory('${encodeURIComponent(catName)}')">Enregistrer</button>
-                <button type="button" style="width:100%; margin-top:10px; background:#500" onclick="admin.deleteCategory('${encodeURIComponent(catName)}')">Supprimer</button>
+                <button type="button" class="primary-btn" style="width:100%" onclick="admin.updateCategory('${encodeURIComponent(catName)}')">Enregistrer</button>
+                <button type="button" class="danger-btn" style="width:100%; margin-top:10px" onclick="admin.deleteCategory('${encodeURIComponent(catName)}')">Supprimer</button>
             </form>
         `);
     },
@@ -658,9 +659,9 @@ const admin = {
                         </div>
                     </div>
                     <div class="option-group-actions">
-                        <button class="btn-sm" onclick="admin.showEditOptionGroupModal(${group.id})">✏️ Modifier</button>
-                        <button class="btn-sm btn-primary" onclick="admin.showAddOptionItemModal(${group.id})">+ Option</button>
-                        <button class="btn-sm" style="background:#500; color:white" onclick="admin.deleteOptionGroup(${group.id})">🗑️</button>
+                        <button class="secondary-btn btn-sm icon-btn" onclick="admin.showEditOptionGroupModal(${group.id})">✏️</button>
+                        <button class="primary-btn btn-sm" onclick="admin.showAddOptionItemModal(${group.id})">+ Option</button>
+                        <button class="danger-btn btn-sm icon-btn" onclick="admin.deleteOptionGroup(${group.id})">🗑️</button>
                     </div>
                 </div>
                 <div class="option-group-content">
@@ -674,8 +675,8 @@ const admin = {
                                     ${!item.available ? '<span class="status-badge status-cancelled">INDISPONIBLE</span>' : ''}
                                 </div>
                                 <div class="option-item-actions">
-                                    <button class="btn-sm" onclick="admin.showEditOptionItemModal(${group.id}, ${item.id})">✏️</button>
-                                    <button class="btn-sm" style="background:#500; color:white" onclick="admin.deleteOptionItem(${item.id})">🗑️</button>
+                                    <button class="secondary-btn btn-sm icon-btn" onclick="admin.showEditOptionItemModal(${group.id}, ${item.id})">✏️</button>
+                                    <button class="danger-btn btn-sm icon-btn" onclick="admin.deleteOptionItem(${item.id})">🗑️</button>
                                 </div>
                             </div>
                         `).join('') : '<p class="empty-msg">Aucune option dans ce groupe.</p>'}
@@ -685,7 +686,7 @@ const admin = {
                         <h4>Produits affectés</h4>
                         <div class="product-tag-list" id="assigned-products-${group.id}">
                             ${this.renderAssignedProducts(group.id)}
-                            <button class="btn-sm" onclick="admin.showAssignProductModal(${group.id})">+ Affecter</button>
+                            <button class="primary-btn btn-sm" onclick="admin.showAssignProductModal(${group.id})">+ Affecter</button>
                         </div>
                     </div>
                 </div>
@@ -717,7 +718,7 @@ const admin = {
                 <div class="form-row"><label>Sélections Min</label><input type="number" id="og-min" value="0"></div>
                 <div class="form-row"><label>Sélections Max</label><input type="number" id="og-max" value="1"></div>
                 <div class="form-row"><label>Ordre d'affichage</label><input type="number" id="og-sort" value="0"></div>
-                <button type="button" class="btn-primary" style="width:100%" onclick="admin.saveOptionGroup()">Enregistrer le groupe</button>
+                <button type="button" class="primary-btn" style="width:100%" onclick="admin.saveOptionGroup()">Enregistrer le groupe</button>
             </form>
         `);
     },
@@ -756,7 +757,7 @@ const admin = {
                 <div class="form-row"><label>Sélections Min</label><input type="number" id="og-min" value="${group.minSelect}"></div>
                 <div class="form-row"><label>Sélections Max</label><input type="number" id="og-max" value="${group.maxSelect}"></div>
                 <div class="form-row"><label>Ordre d'affichage</label><input type="number" id="og-sort" value="${group.sortOrder}"></div>
-                <button type="button" class="btn-primary" style="width:100%" onclick="admin.saveOptionGroup(${id})">Mettre à jour</button>
+                <button type="button" class="primary-btn" style="width:100%" onclick="admin.saveOptionGroup(${id})">Mettre à jour</button>
             </form>
         `);
     },
@@ -774,7 +775,7 @@ const admin = {
                 <div class="form-row"><label>Prix Supplémentaire (MAD)</label><input type="number" id="oi-price" value="0"></div>
                 <div class="form-row"><label>Image URL</label><input type="text" id="oi-img"></div>
                 <div class="form-row"><label>Ordre d'affichage</label><input type="number" id="oi-sort" value="0"></div>
-                <button type="button" class="btn-primary" style="width:100%" onclick="admin.saveOptionItem(${groupId})">Ajouter l'option</button>
+                <button type="button" class="primary-btn" style="width:100%" onclick="admin.saveOptionItem(${groupId})">Ajouter l'option</button>
             </form>
         `);
     },

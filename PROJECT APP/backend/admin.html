@@ -20,7 +20,7 @@
             <div class="input-group">
                 <input type="password" id="admin-password" placeholder="Mot de passe admin">
             </div>
-            <button id="login-btn">Se connecter</button>
+            <button id="login-btn" class="primary-btn">Se connecter</button>
         </div>
     </div>
 
@@ -39,7 +39,7 @@
                 <li data-tab="push">Notifications</li>
             </ul>
             <div class="sidebar-footer">
-                <button id="logout-btn">Déconnexion</button>
+                <button id="logout-btn" class="danger-btn">Déconnexion</button>
             </div>
         </nav>
 
@@ -108,8 +108,8 @@
                 <header class="tab-header">
                     <h2>Menu & Produits</h2>
                     <div class="header-actions">
-                        <button class="btn-primary" onclick="admin.showAddCategoryModal()">+ Catégorie</button>
-                        <button class="btn-primary" onclick="admin.showAddProductModal()">+ Produit</button>
+                        <button class="primary-btn" onclick="admin.showAddCategoryModal()">+ Catégorie</button>
+                        <button class="primary-btn" onclick="admin.showAddProductModal()">+ Produit</button>
                     </div>
                 </header>
                 <div class="menu-manager">
@@ -125,6 +125,8 @@
                 </header>
                 <form id="settings-form" class="admin-form">
                     <div class="settings-grid">
+                        </div>
+
                         <div class="form-section">
                             <h3>Informations Boutique</h3>
                             <div class="form-row">
@@ -132,7 +134,7 @@
                                 <input type="text" id="setting-store-name" placeholder="Ex: 3P CHICKEN POPS">
                             </div>
                             <div class="form-row">
-                                <label>Boutique Ouverte</label>
+                                <label>Boutique Ouverte (Manuel)</label>
                                 <div class="toggle-container">
                                     <input type="checkbox" id="setting-is-open">
                                     <span class="toggle-slider"></span>
@@ -157,10 +159,40 @@
                         </div>
 
                         <div class="form-section">
+                            <h3>Horaires automatiques</h3>
+                            <div class="form-row">
+                                <label>Activer ouverture/fermeture automatique</label>
+                                <div class="toggle-container">
+                                    <input type="checkbox" id="setting-auto-schedule">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <label>Heure d'ouverture (Ex: 11:00)</label>
+                                <input type="time" id="setting-opening-time">
+                            </div>
+                            <div class="form-row">
+                                <label>Heure de fermeture (Ex: 03:00)</label>
+                                <input type="time" id="setting-closing-time">
+                            </div>
+                            <div class="form-row">
+                                <label>Fuseau horaire</label>
+                                <select id="setting-timezone">
+                                    <option value="Africa/Casablanca">Africa/Casablanca (Maroc)</option>
+                                    <option value="UTC">UTC</option>
+                                </select>
+                            </div>
+                            <div class="status-preview">
+                                <span>Statut actuel :</span>
+                                <div id="setting-computed-status" class="badge">--</div>
+                            </div>
+                        </div>
+
+                        <div class="form-section">
                             <h3>Localisation GPS</h3>
                             <div class="map-search-container">
                                 <input type="text" id="map-search-input" placeholder="Rechercher une adresse...">
-                                <button type="button" id="map-search-btn">🔍</button>
+                                <button type="button" id="map-search-btn" class="secondary-btn icon-btn">🔍</button>
                             </div>
                             <div id="shop-map" class="map-picker"></div>
                             <div class="coord-inputs">
@@ -258,7 +290,7 @@
                             <option value="">-- Choisir --</option>
                         </select>
                     </div>
-                    <button type="submit" class="btn-push">🚀 Envoyer la notification</button>
+                    <button type="submit" class="primary-btn" style="width: 100%; padding: 16px;">🚀 Envoyer la notification</button>
                 </form>
                 <div id="push-result" class="push-result hidden"></div>
             </section>
@@ -268,7 +300,7 @@
                 <header class="tab-header">
                     <h2>Gestion des Options</h2>
                     <div class="header-actions">
-                        <button class="btn-primary" onclick="admin.showAddOptionGroupModal()">+ Ajouter un Groupe</button>
+                        <button class="primary-btn" onclick="admin.showAddOptionGroupModal()">+ Ajouter un Groupe</button>
                     </div>
                 </header>
                 <div id="options-container" class="options-manager">
