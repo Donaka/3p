@@ -190,6 +190,7 @@ const admin = {
             this.stopOrderPolling();
         }
 
+        console.log("Opening tab:", tab);
         switch(tab) {
             case 'dashboard': this.loadDashboard(); break;
             case 'orders': this.loadOrders(); break;
@@ -299,12 +300,18 @@ const admin = {
     },
 
     async loadMenu() {
-        const data = await this.api('/api/menu');
-        this.menu = data;
-        this.renderCategories();
-        if (this.menu.categories && this.menu.categories.length > 0) {
-            const firstCat = this.menu.categories[0];
-            this.renderProducts(firstCat.name || firstCat);
+        console.log("Loading menu...");
+        try {
+            const data = await this.api('/api/menu');
+            this.menu = data;
+            this.renderCategories();
+            if (this.menu?.categories?.length > 0) {
+                const firstCat = this.menu.categories[0];
+                this.renderProducts(firstCat.name || firstCat);
+            }
+        } catch (e) {
+            console.error("Failed to load menu", e);
+            this.showToast("Erreur de chargement du menu", "error");
         }
     },
 
@@ -350,32 +357,38 @@ const admin = {
         });
     },
     async loadSettings() {
-        const settings = await this.api('/api/settings');
-        document.getElementById('setting-store-name').value = settings.storeName || '';
-        document.getElementById('setting-is-open').checked = settings.manualIsStoreOpen;
-        document.getElementById('setting-phone').value = settings.shopPhone || '';
-        document.getElementById('setting-whatsapp').value = settings.shopWhatsAppNumber || '';
-        document.getElementById('setting-address').value = settings.shopAddress || '';
-        document.getElementById('setting-closed-message').value = settings.closedMessage || '';
-        
-        document.getElementById('setting-lat').value = settings.shopLatitude;
-        document.getElementById('setting-lng').value = settings.shopLongitude;
-        
-        document.getElementById('setting-min-delivery-price').value = settings.minimumDeliveryPrice ?? 10;
-        document.getElementById('setting-base-distance').value = settings.baseDeliveryDistanceKm ?? 1;
-        document.getElementById('setting-extra-km-price').value = settings.extraKmPrice ?? 5;
-        document.getElementById('setting-max-distance').value = settings.maxDeliveryKm || '';
+        console.log("Loading settings...");
+        try {
+            const settings = await this.api('/api/settings');
+            document.getElementById('setting-store-name').value = settings.storeName || '';
+            document.getElementById('setting-is-open').checked = settings.manualIsStoreOpen;
+            document.getElementById('setting-phone').value = settings.shopPhone || '';
+            document.getElementById('setting-whatsapp').value = settings.shopWhatsAppNumber || '';
+            document.getElementById('setting-address').value = settings.shopAddress || '';
+            document.getElementById('setting-closed-message').value = settings.closedMessage || '';
+            
+            document.getElementById('setting-lat').value = settings.shopLatitude;
+            document.getElementById('setting-lng').value = settings.shopLongitude;
+            
+            document.getElementById('setting-min-delivery-price').value = settings.minimumDeliveryPrice ?? 10;
+            document.getElementById('setting-base-distance').value = settings.baseDeliveryDistanceKm ?? 1;
+            document.getElementById('setting-extra-km-price').value = settings.extraKmPrice ?? 5;
+            document.getElementById('setting-max-distance').value = settings.maxDeliveryKm || '';
 
-        // Auto Hours
-        document.getElementById('setting-auto-schedule').checked = settings.autoScheduleEnabled;
-        document.getElementById('setting-opening-time').value = settings.openingTime || '11:00';
-        document.getElementById('setting-closing-time').value = settings.closingTime || '03:00';
-        document.getElementById('setting-timezone').value = settings.timezone || 'Africa/Casablanca';
-        
-        this.updateComputedStatusPreview(settings);
+            // Auto Hours
+            document.getElementById('setting-auto-schedule').checked = settings.autoScheduleEnabled;
+            document.getElementById('setting-opening-time').value = settings.openingTime || '11:00';
+            document.getElementById('setting-closing-time').value = settings.closingTime || '03:00';
+            document.getElementById('setting-timezone').value = settings.timezone || 'Africa/Casablanca';
+            
+            this.updateComputedStatusPreview(settings);
 
-        this.initMap(settings.shopLatitude, settings.shopLongitude);
-        this.updateDeliveryPreview();
+            this.initMap(settings.shopLatitude, settings.shopLongitude);
+            this.updateDeliveryPreview();
+        } catch (e) {
+            console.error("Failed to load settings", e);
+            this.showToast("Erreur de chargement des paramètres", "error");
+        }
     },
 
     initMap(lat, lng) {
@@ -485,8 +498,59 @@ const admin = {
     },
 
     async loadPushInfo() {
-        const data = await this.api('/api/device-tokens');
-        document.getElementById('push-device-count').textContent = `${data.tokens.length} appareils enregistrés`;
+        console.log("Loading notifications info...");
+        try {
+            const data = await this.api('/api/device-tokens');
+            const count = data?.tokens?.length || 0;
+            const countEl = document.getElementById('push-device-count');
+            if (countEl) countEl.textContent = `${count} appareils enregistrés`;
+            
+            // Also load menu to populate link targets
+            if (!this.menu) await this.loadMenu();
+        } catch (e) {
+            console.error("Failed to load push info", e);
+            const countEl = document.getElementById('push-device-count');
+            if (countEl) countEl.textContent = "Erreur de chargement des appareils.";
+        }
+    },
+
+    updatePushLinkOptions(type) {
+        const container = document.getElementById('push-link-container');
+        const selectContainer = document.getElementById('push-link-select-wrapper');
+        
+        if (!['product', 'category', 'order'].includes(type)) {
+            container.style.display = 'none';
+            return;
+        }
+
+        container.style.display = 'block';
+        
+        if (type === 'order') {
+            selectContainer.innerHTML = '<input type="text" id="push-link-id" placeholder="ID de la commande" class="form-control">';
+        } else {
+            let options = '<option value="">-- Choisir --</option>';
+            if (type === 'product' && this.menu?.products) {
+                this.menu.products.forEach(p => {
+                    options += `<option value="${p.id}">${p.name}</option>`;
+                });
+            } else if (type === 'category' && this.menu?.categories) {
+                this.menu.categories.forEach(c => {
+                    const name = c.name || c;
+                    options += `<option value="${name}">${name}</option>`;
+                });
+            }
+            selectContainer.innerHTML = `<select id="push-link-id" onchange="admin.autoFillPushImage(this.value)">${options}</select>`;
+        }
+    },
+
+    autoFillPushImage(id) {
+        const type = document.getElementById('push-type').value;
+        const imgInput = document.getElementById('push-image-url');
+        
+        if (type === 'product' && this.menu?.products) {
+            const p = this.menu.products.find(x => String(x.id) === String(id));
+            if (p?.imageUrl) imgInput.value = p.imageUrl;
+        }
     },
 
     async sendPush() {
@@ -653,13 +717,18 @@ const admin = {
     },
 
     async loadOptions() {
+        console.log("Loading options...");
+        const container = document.getElementById('options-container');
+        if (container) container.innerHTML = '<p class="empty-msg">Chargement des options...</p>';
+
         try {
             const data = await this.api('/api/options');
             const menu = await this.api('/api/menu');
-            this.allProducts = menu.products;
-            this.renderOptions(data.groups);
+            this.allProducts = menu?.products || [];
+            this.renderOptions(data?.groups || []);
         } catch (e) {
             console.error('Failed to load options', e);
+            if (container) container.innerHTML = '<p class="empty-msg" style="color:var(--danger)">Erreur de chargement. Vérifiez l’API.</p>';
         }
     },
 
@@ -670,15 +739,15 @@ const admin = {
             return;
         }
 
-        container.innerHTML = groups.map(group => `
+        container.innerHTML = (groups || []).map(group => `
             <div class="option-group-card" id="group-${group.id}">
                 <div class="option-group-header">
                     <div class="option-group-info">
                         <h3>${group.name}</h3>
                         <div class="option-group-badges">
                             ${group.required ? '<span class="badge status-badge status-new">OBLIGATOIRE</span>' : '<span class="badge-outline">OPTIONNEL</span>'}
-                            <span class="badge-outline">Min: ${group.minSelect}</span>
-                            <span class="badge-outline">Max: ${group.maxSelect}</span>
+                            <span class="badge-outline">Min: ${group.minSelect || 0}</span>
+                            <span class="badge-outline">Max: ${group.maxSelect || 1}</span>
                         </div>
                     </div>
                     <div class="option-group-actions">
@@ -689,7 +758,7 @@ const admin = {
                 </div>
                 <div class="option-group-content">
                     <div class="option-items-list">
-                        ${group.items.length > 0 ? group.items.map(item => `
+                        ${(group.items || []).length > 0 ? group.items.map(item => `
                             <div class="option-item-row">
                                 <div class="option-item-info">
                                     ${item.imageUrl ? `<img src="${item.imageUrl}" class="option-item-img">` : ''}
@@ -718,6 +787,7 @@ const admin = {
     },
 
     renderAssignedProducts(groupId) {
+        if (!this.allProducts) return '';
         const assigned = this.allProducts.filter(p => p.options?.some(o => Number(o.id) === Number(groupId)));
         return assigned.map(p => `
             <div class="product-tag">
