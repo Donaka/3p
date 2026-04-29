@@ -493,24 +493,27 @@ function trimOrNull(value) {
 }
 
 function normalizePhone(phone) {
-  if (!phone) return "";
-  let cleaned = String(phone).replace(/\D/g, "");
-  // Standard normalization for search/storage
-  if (cleaned.startsWith("06") && cleaned.length === 10) return "212" + cleaned.slice(1);
-  if (cleaned.startsWith("07") && cleaned.length === 10) return "212" + cleaned.slice(1);
-  if (cleaned.startsWith("0") && !cleaned.startsWith("00")) cleaned = cleaned.slice(1);
-  return cleaned;
+  return normalizeMoroccoPhone(phone);
 }
 
 function normalizeMoroccoPhone(phone) {
   if (!phone) return "";
   let cleaned = String(phone).replace(/\D/g, "");
-  if (cleaned.startsWith("06") && cleaned.length === 10) return "+2126" + cleaned.slice(1);
-  if (cleaned.startsWith("07") && cleaned.length === 10) return "+2127" + cleaned.slice(1);
-  if (cleaned.startsWith("212") && cleaned.length === 12) return "+" + cleaned;
-  if (cleaned.startsWith("+212")) return cleaned;
-  // If it starts with 0 and is 10 digits but not 06/07, assume it's also a local number
-  if (cleaned.startsWith("0") && cleaned.length === 10) return "+212" + cleaned.slice(1);
+  if (cleaned.startsWith("00")) cleaned = cleaned.slice(2);
+  if (cleaned.startsWith("+")) cleaned = cleaned.slice(1);
+  
+  if (cleaned.startsWith("212")) {
+    return "+" + cleaned;
+  }
+  
+  if (cleaned.startsWith("0") && cleaned.length === 10) {
+    return "+212" + cleaned.slice(1);
+  }
+  
+  if (cleaned.length === 9 && (cleaned.startsWith("6") || cleaned.startsWith("7") || cleaned.startsWith("5"))) {
+    return "+212" + cleaned;
+  }
+
   return cleaned.startsWith("+") ? cleaned : "+" + cleaned;
 }
 
@@ -1240,7 +1243,7 @@ async function upsertCustomer(client, order) {
 
 async function authenticateCustomer({ phone = "", name = "", email = "", firebaseUid = "", provider = "phone" } = {}) {
   return withDatabase(async () => {
-    const normalizedPhone = normalizePhone(phone);
+    const normalizedPhone = normalizeMoroccoPhone(phone);
     const normalizedName = String(name || "").trim();
     const normalizedEmail = String(email || "").trim().toLowerCase();
     
@@ -2464,9 +2467,11 @@ app.post("/api/customer-auth", asyncHandler(async (req, res) => {
     name: req.body.name,
     email: req.body.email,
     firebaseUid: req.body.firebaseUid,
-    provider: req.body.provider
+    provider: req.body.provider || "phone"
   });
-  res.json(result);
+  const token = generateToken(result);
+  console.log("Profile update success:", result?.id);
+  res.json({ ok: true, customer: result, token });
 }));
 
 async function sendInfobipSMS(to, message) {
@@ -2589,7 +2594,12 @@ app.post("/api/auth/phone/verify", asyncHandler(async (req, res) => {
     });
 
     const token = generateToken(customer);
-    return { customer, token };
+    console.log("OTP verify success:", customer?.phone);
+    return { 
+      customer, 
+      token, 
+      needsName: !customer.name 
+    };
   });
 
   res.json({ ok: true, ...result });
