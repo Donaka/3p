@@ -582,12 +582,12 @@ function normalizeSettings(settings = {}) {
     shopLatitude: Number(settings.shopLatitude) || fallbackSettings.shopLatitude,
     shopLongitude: Number(settings.shopLongitude) || fallbackSettings.shopLongitude,
     shopWhatsAppNumber: String(settings.shopWhatsAppNumber || fallbackSettings.shopWhatsAppNumber).replace(/[^\d]/g, "").trim() || fallbackSettings.shopWhatsAppNumber,
-    deliveryPricePerKm: Math.max(0, Number(settings.deliveryPricePerKm) || fallbackSettings.deliveryPricePerKm),
-    minimumDeliveryPrice: Math.max(0, Number(settings.minimumDeliveryPrice) ?? fallbackSettings.minimumDeliveryPrice),
-    baseDeliveryDistanceKm: Math.max(0, Number(settings.baseDeliveryDistanceKm) ?? fallbackSettings.baseDeliveryDistanceKm),
-    extraKmPrice: Math.max(0, Number(settings.extraKmPrice) ?? fallbackSettings.extraKmPrice),
+    deliveryPricePerKm: Math.max(0, Number(settings.deliveryPricePerKm || fallbackSettings.deliveryPricePerKm)),
+    minimumDeliveryPrice: Math.max(0, (settings.minimumDeliveryPrice === undefined || settings.minimumDeliveryPrice === null || settings.minimumDeliveryPrice === "") ? fallbackSettings.minimumDeliveryPrice : Number(settings.minimumDeliveryPrice)),
+    baseDeliveryDistanceKm: Math.max(0, (settings.baseDeliveryDistanceKm === undefined || settings.baseDeliveryDistanceKm === null || settings.baseDeliveryDistanceKm === "") ? fallbackSettings.baseDeliveryDistanceKm : Number(settings.baseDeliveryDistanceKm)),
+    extraKmPrice: Math.max(0, (settings.extraKmPrice === undefined || settings.extraKmPrice === null || settings.extraKmPrice === "") ? fallbackSettings.extraKmPrice : Number(settings.extraKmPrice)),
     maxDeliveryKm: parseOptionalNumber(settings.maxDeliveryKm),
-    minimumOrderAmount: Math.max(0, Number(settings.minimumOrderAmount) || fallbackSettings.minimumOrderAmount),
+    minimumOrderAmount: Math.max(0, Number(settings.minimumOrderAmount || fallbackSettings.minimumOrderAmount)),
     preparationTimeBase: Math.max(5, Math.round(Number(settings.preparationTimeBase) || fallbackSettings.preparationTimeBase)),
     defaultDeliveryCountdownMinutes: Math.max(5, Math.round(Number(settings.defaultDeliveryCountdownMinutes) || fallbackSettings.defaultDeliveryCountdownMinutes)),
     deliveryZones: Array.isArray(settings.deliveryZones)
@@ -1383,10 +1383,21 @@ async function createOrderRecord(order) {
       // Re-calculate delivery fee on backend for security
       let deliveryFee = 0;
       if (order.mode === "delivery") {
-        deliveryFee = settings.minimumDeliveryPrice || 10;
-        if (order.distanceKm > settings.baseDeliveryDistanceKm) {
-          deliveryFee += (order.distanceKm - settings.baseDeliveryDistanceKm) * (settings.extraKmPrice || 5);
+        const minPrice = Number(settings.minimumDeliveryPrice);
+        const baseDist = Number(settings.baseDeliveryDistanceKm);
+        const extraPrice = Number(settings.extraKmPrice);
+        
+        deliveryFee = minPrice;
+        if (order.distanceKm > baseDist) {
+          const extraKm = Math.ceil(order.distanceKm - baseDist);
+          deliveryFee += extraKm * extraPrice;
         }
+        
+        if (deliveryFee === 0 && minPrice > 0) {
+          console.warn("[Order] Delivery fee calculated as 0 but minPrice is", minPrice, ". Using minPrice.");
+          deliveryFee = minPrice;
+        }
+        console.log(`[Order] Delivery Fee Recalculated: ${deliveryFee} (Dist: ${order.distanceKm}km, Min: ${minPrice})`);
       }
       
       const subtotal = order.items.reduce((sum, i) => sum + i.lineTotal, 0);
@@ -1803,6 +1814,12 @@ async function createNotificationRecord(notification) {
       notification.active !== false
     ]);
     return enrichNotification(mapNotificationRow(result.rows[0]));
+  });
+}
+
+async function clearAllNotifications() {
+  return withDatabase(async () => {
+    await dbPool.query("DELETE FROM notifications");
   });
 }
 
@@ -2441,6 +2458,12 @@ app.post("/api/notify", asyncHandler(async (req, res) => {
   // (I'll keep it simple for now, assuming existing functions are used)
   const result = await handleNotifyRequest(req.body); 
   res.json(result);
+}));
+
+app.post("/api/notifications/clear-all", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  await clearAllNotifications();
+  res.json({ success: true });
 }));
 
 app.post("/api/device-token", asyncHandler(async (req, res) => {

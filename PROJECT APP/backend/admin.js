@@ -224,6 +224,7 @@ const admin = {
             document.getElementById('pushAction')?.addEventListener('change', (e) => {
                 this.updatePushLinkOptions(e.target.value);
             });
+            document.getElementById('clear-notifications-btn')?.addEventListener('click', () => this.clearAllNotifications());
         }
     },
 
@@ -348,8 +349,13 @@ const admin = {
     renderNotificationsTab() {
         return `
             <header class="tab-header">
-                <h1>Notifications Push</h1>
-                <p id="pushDeviceCount">Chargement des appareils...</p>
+                <div>
+                    <h1>Notifications Push</h1>
+                    <p id="pushDeviceCount">Chargement des appareils...</p>
+                </div>
+                <div class="header-actions">
+                    <button id="clear-notifications-btn" class="danger-btn btn-sm">🗑️ Tout effacer</button>
+                </div>
             </header>
             <form id="pushForm" class="admin-form">
                 <div class="form-row"><label>Titre</label><input type="text" id="pushTitle" placeholder="Titre"></div>
@@ -769,6 +775,19 @@ const admin = {
                 btn.disabled = false;
                 btn.textContent = '🚀 Envoyer la notification';
             }
+        }
+    },
+
+    async clearAllNotifications() {
+        if (!confirm('Voulez-vous vraiment effacer TOUTES les notifications pour TOUS les utilisateurs ? Cette action est irréversible.')) return;
+        
+        try {
+            await this.api('/api/notifications/clear-all', 'POST');
+            this.showToast('Toutes les notifications ont été effacées.');
+            this.loadPushInfo();
+        } catch (e) {
+            console.error('Failed to clear notifications', e);
+            alert('Erreur lors de l\'effacement');
         }
     },
 
