@@ -217,11 +217,11 @@ const admin = {
             });
         }
         if (tab === 'push') {
-            document.getElementById('push-form')?.addEventListener('submit', (e) => {
+            document.getElementById('pushForm')?.addEventListener('submit', (e) => {
                 e.preventDefault();
                 this.sendPush();
             });
-            document.getElementById('push-type')?.addEventListener('change', (e) => {
+            document.getElementById('pushAction')?.addEventListener('change', (e) => {
                 this.updatePushLinkOptions(e.target.value);
             });
         }
@@ -349,17 +349,22 @@ const admin = {
         return `
             <header class="tab-header">
                 <h1>Notifications Push</h1>
-                <p id="push-device-count">Chargement des appareils...</p>
+                <p id="pushDeviceCount">Chargement des appareils...</p>
             </header>
-            <form id="push-form" class="admin-form">
-                <div class="form-row"><label>Titre</label><input type="text" id="push-title" placeholder="Titre"></div>
-                <div class="form-row"><label>Message</label><textarea id="push-body" placeholder="Message"></textarea></div>
-                <div class="form-row"><label>Son 3P</label><input type="checkbox" id="push-custom-sound" checked></div>
-                <div class="form-row"><label>Cible</label><select id="push-target"><option value="ALL">Tous</option></select></div>
-                <div class="form-row"><label>Image URL</label><input type="url" id="push-image-url"></div>
-                <div class="form-row"><label>Type</label><select id="push-type"><option value="home">Accueil</option><option value="product">Produit</option><option value="category">Catégorie</option><option value="order">Commande</option></select></div>
-                <div class="form-row" id="push-link-container" style="display:none;"><label>Cible spécifique</label><div id="push-link-select-wrapper"></div></div>
-                <button type="submit" id="send-push-btn" class="primary-btn" style="width:100%; margin-top:20px;">🚀 Envoyer la notification</button>
+            <form id="pushForm" class="admin-form">
+                <div class="form-row"><label>Titre</label><input type="text" id="pushTitle" placeholder="Titre"></div>
+                <div class="form-row"><label>Message</label><textarea id="pushMessage" placeholder="Message"></textarea></div>
+                <div class="form-row"><label>Son 3P</label><input type="checkbox" id="pushCustomSound" checked></div>
+                <div class="form-row"><label>Cible</label><select id="pushTarget"><option value="ALL">Tous</option></select></div>
+                <div class="form-row"><label>Image URL</label><input type="url" id="pushImageUrl"></div>
+                <div class="form-row"><label>Type d'action</label><select id="pushAction">
+                    <option value="home">Accueil</option>
+                    <option value="product">Produit</option>
+                    <option value="category">Catégorie</option>
+                    <option value="order">Commande</option>
+                </select></div>
+                <div class="form-row" id="pushLinkContainer" style="display:none;"><label>Cible spécifique</label><div id="pushLinkSelectWrapper"></div></div>
+                <button type="submit" id="sendPushBtn" class="primary-btn" style="width:100%; margin-top:20px;">🚀 Envoyer la notification</button>
             </form>
         `;
     },
@@ -672,22 +677,23 @@ const admin = {
         try {
             const data = await this.api('/api/device-tokens');
             const count = data?.tokens?.length || 0;
-            const countEl = document.getElementById('push-device-count');
+            const countEl = document.getElementById('pushDeviceCount');
             if (countEl) countEl.textContent = `${count} appareils enregistrés`;
             
             // Also load menu to populate link targets
             if (!this.menu) await this.loadMenu();
         } catch (e) {
             console.error("Failed to load push info", e);
-            const countEl = document.getElementById('push-device-count');
+            const countEl = document.getElementById('pushDeviceCount');
             if (countEl) countEl.textContent = "Erreur de chargement des appareils.";
         }
     },
 
     updatePushLinkOptions(type) {
-        const container = document.getElementById('push-link-container');
-        const selectContainer = document.getElementById('push-link-select-wrapper');
-        
+        const container = document.getElementById('pushLinkContainer');
+        const selectContainer = document.getElementById('pushLinkSelectWrapper');
+        if (!container || !selectContainer) return;
+
         if (!['product', 'category', 'order'].includes(type)) {
             container.style.display = 'none';
             return;
@@ -696,8 +702,9 @@ const admin = {
         container.style.display = 'block';
         
         if (type === 'order') {
-            selectContainer.innerHTML = '<input type="text" id="push-link-id" placeholder="ID de la commande" class="form-control">';
+            selectContainer.innerHTML = '<input type="text" id="pushOrderId" placeholder="ID de la commande" class="form-control">';
         } else {
+            const id = type === 'product' ? 'pushProductId' : 'pushCategoryId';
             let options = '<option value="">-- Choisir --</option>';
             if (type === 'product' && this.menu?.products) {
                 this.menu.products.forEach(p => {
@@ -709,13 +716,14 @@ const admin = {
                     options += `<option value="${name}">${name}</option>`;
                 });
             }
-            selectContainer.innerHTML = `<select id="push-link-id" onchange="admin.autoFillPushImage(this.value)">${options}</select>`;
+            selectContainer.innerHTML = `<select id="${id}" onchange="admin.autoFillPushImage(this.value)">${options}</select>`;
         }
     },
 
     autoFillPushImage(id) {
-        const type = document.getElementById('push-type').value;
-        const imgInput = document.getElementById('push-image-url');
+        const type = document.getElementById('pushAction')?.value;
+        const imgInput = document.getElementById('pushImageUrl');
+        if (!imgInput) return;
         
         if (type === 'product' && this.menu?.products) {
             const p = this.menu.products.find(x => String(x.id) === String(id));
@@ -724,33 +732,43 @@ const admin = {
     },
 
     async sendPush() {
-        const btn = document.getElementById('send-push-btn');
-        btn.disabled = true;
-        btn.textContent = 'Envoi en cours...';
+        const title = document.getElementById('pushTitle')?.value?.trim();
+        const body = document.getElementById('pushMessage')?.value?.trim();
+
+        if (!title || !body) {
+            alert("Veuillez saisir un titre et un message.");
+            return;
+        }
+
+        const btn = document.getElementById('sendPushBtn');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Envoi en cours...';
+        }
 
         const payload = {
-            title: document.getElementById('push-title').value,
-            message: document.getElementById('push-body').value,
-            imageUrl: document.getElementById('push-image-url').value,
-            customerId: document.getElementById('push-target').value,
-            type: document.getElementById('push-type').value,
-            id: document.getElementById('push-link-id').value,
-            useCustomSound: document.getElementById('push-custom-sound').checked
+            title,
+            message: body,
+            imageUrl: document.getElementById('pushImageUrl')?.value?.trim() || "",
+            customerId: document.getElementById('pushTarget')?.value || "ALL",
+            action: document.getElementById('pushAction')?.value || "home",
+            linkedProductId: document.getElementById('pushProductId')?.value || "",
+            linkedCategoryId: document.getElementById('pushCategoryId')?.value || "",
+            orderId: document.getElementById('pushOrderId')?.value || "",
+            useCustomSound: document.getElementById('pushCustomSound')?.checked ?? true
         };
-
-        // Map type to the keys expected by /api/notify
-        if (payload.type === 'product') payload.linkedProductId = payload.id;
-        if (payload.type === 'category') payload.linkedCategoryId = payload.id;
-        if (payload.type === 'order') payload.orderId = payload.id;
 
         try {
             const res = await this.api('/api/notify', 'POST', payload);
             alert(`Envoyé ! Succès: ${res.count}, Échecs: ${res.failureCount}`);
         } catch (e) {
-            alert('Erreur d\'envoi');
+            console.error('Push failed', e);
+            alert('Erreur d\'envoi. Vérifiez la console.');
         } finally {
-            btn.disabled = false;
-            btn.textContent = '🚀 Envoyer la notification';
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '🚀 Envoyer la notification';
+            }
         }
     },
 
