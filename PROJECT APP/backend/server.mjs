@@ -403,6 +403,17 @@ async function ensureDatabase() {
             PRIMARY KEY (product_id, group_id)
           );
         `);
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS otp_codes (
+            id BIGSERIAL PRIMARY KEY,
+            phone TEXT NOT NULL,
+            code TEXT NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL,
+            verified BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+        `);
+        await client.query(`CREATE INDEX IF NOT EXISTS otp_codes_phone_idx ON otp_codes(phone);`);
         console.log("PostgreSQL schema ready: settings, menu_snapshots, orders, order_items, customers, notifications, device_tokens, option_groups, option_items, product_option_groups");
       } finally {
         client.release();
@@ -2317,6 +2328,52 @@ app.post("/api/customer-auth", asyncHandler(async (req, res) => {
     firebaseUid: req.body.firebaseUid,
     provider: req.body.provider
   });
+  res.json(result);
+}));
+
+app.post("/api/otp/send", asyncHandler(async (req, res) => {
+  const { phone } = req.body;
+  if (!phone) return res.status(400).json({ error: "Phone required" });
+  
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+  
+  await withDatabase(async () => {
+    await dbPool.query("DELETE FROM otp_codes WHERE phone = $1", [phone]);
+    await dbPool.query(
+      "INSERT INTO otp_codes (phone, code, expires_at) VALUES ($1, $2, $3)",
+      [phone, code, expiresAt]
+    );
+  });
+
+  console.log(`[OTP] Sent ${code} to ${phone}`);
+  // In production, integrate with Twilio/Infobip here
+  res.json({ success: true, message: "Code sent" });
+}));
+
+app.post("/api/otp/verify", asyncHandler(async (req, res) => {
+  const { phone, code, name } = req.body;
+  if (!phone || !code) return res.status(400).json({ error: "Phone and code required" });
+
+  const result = await withDatabase(async () => {
+    const resOtp = await dbPool.query(
+      "SELECT * FROM otp_codes WHERE phone = $1 AND code = $2 AND expires_at > NOW() AND verified = FALSE LIMIT 1",
+      [phone, code]
+    );
+    
+    if (resOtp.rows.length === 0) return { error: "Invalid or expired code" };
+    
+    await dbPool.query("UPDATE otp_codes SET verified = TRUE WHERE id = $1", [resOtp.rows[0].id]);
+    
+    // Auto-authenticate
+    return await authenticateCustomer({
+      phone,
+      name: name || "",
+      provider: "phone"
+    });
+  });
+
+  if (result.error) return res.status(400).json({ error: result.error });
   res.json(result);
 }));
 
