@@ -514,7 +514,7 @@ const admin = {
                 <div class="form-row"><label>Prix (MAD)</label><input type="number" id="p-price" required></div>
                 <div class="form-row"><label>Description</label><textarea id="p-desc"></textarea></div>
                 <div class="form-row"><label>Image URL</label><input type="text" id="p-img"></div>
-                <div class="form-row"><label>Thumbnail URL (400x400)</label><input type="text" id="p-thumb"></div>
+                <div class="form-row"><label>Thumbnail URL (Optimisée)</label><input type="text" id="p-thumb" placeholder="Optionnel"></div>
                 <button type="button" class="btn-primary" style="width:100%" onclick="admin.saveNewProduct()">Ajouter le produit</button>
             </form>
         `);

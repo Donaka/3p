@@ -6,6 +6,7 @@ import pg from "pg";
 import express from "express";
 import cors from "cors";
 import crypto from "node:crypto";
+import jwt from "jsonwebtoken";
 
 
 const root = fileURLToPath(new URL(".", import.meta.url));
@@ -21,6 +22,7 @@ const INFOBIP_API_KEY = process.env.INFOBIP_API_KEY || "fe427475b151cca4ac1d5b8c
 const INFOBIP_BASE_URL = process.env.INFOBIP_BASE_URL || "https://55ejqz.api.infobip.com";
 const INFOBIP_SMS_FROM = process.env.INFOBIP_SMS_FROM || "3P";
 const OTP_CHANNEL = process.env.OTP_CHANNEL || "sms";
+const JWT_SECRET = process.env.JWT_SECRET || "3p_secret_key_2026_!#";
 
 const app = express();
 app.use(cors());
@@ -375,9 +377,11 @@ async function ensureDatabase() {
             token TEXT NOT NULL UNIQUE
           );
         `);
+        await client.query(`ALTER TABLE device_tokens ADD COLUMN IF NOT EXISTS customer_id BIGINT;`);
         await client.query(`
           CREATE INDEX IF NOT EXISTS device_tokens_firebase_uid_idx ON device_tokens(firebase_uid);
         `);
+        await client.query(`CREATE INDEX IF NOT EXISTS device_tokens_customer_id_idx ON device_tokens(customer_id);`);
         await client.query(`
           CREATE INDEX IF NOT EXISTS device_tokens_phone_idx ON device_tokens(phone);
         `);
@@ -427,13 +431,16 @@ async function ensureDatabase() {
             id BIGSERIAL PRIMARY KEY,
             phone TEXT NOT NULL,
             code_hash TEXT NOT NULL,
+            ip_address TEXT,
             expires_at TIMESTAMPTZ NOT NULL,
             attempts INTEGER NOT NULL DEFAULT 0,
             verified BOOLEAN NOT NULL DEFAULT FALSE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           );
         `);
+        await client.query(`ALTER TABLE phone_otps ADD COLUMN IF NOT EXISTS ip_address TEXT;`);
         await client.query(`CREATE INDEX IF NOT EXISTS phone_otps_phone_idx ON phone_otps(phone);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS phone_otps_ip_idx ON phone_otps(ip_address);`);
         console.log("PostgreSQL schema ready: settings, menu_snapshots, orders, order_items, customers, notifications, device_tokens, option_groups, option_items, product_option_groups");
       } finally {
         client.release();
@@ -481,15 +488,38 @@ function normalizePhone(phone) {
 function normalizeMoroccoPhone(phone) {
   if (!phone) return "";
   let cleaned = String(phone).replace(/\D/g, "");
-  if (cleaned.startsWith("06") && cleaned.length === 10) return "212" + cleaned.slice(1);
-  if (cleaned.startsWith("07") && cleaned.length === 10) return "212" + cleaned.slice(1);
-  if (cleaned.startsWith("212") && cleaned.length === 12) return cleaned;
-  return cleaned;
+  if (cleaned.startsWith("06") && cleaned.length === 10) return "+2126" + cleaned.slice(1);
+  if (cleaned.startsWith("07") && cleaned.length === 10) return "+2127" + cleaned.slice(1);
+  if (cleaned.startsWith("212") && cleaned.length === 12) return "+" + cleaned;
+  if (cleaned.startsWith("+212")) return cleaned;
+  // If it starts with 0 and is 10 digits but not 06/07, assume it's also a local number
+  if (cleaned.startsWith("0") && cleaned.length === 10) return "+212" + cleaned.slice(1);
+  return cleaned.startsWith("+") ? cleaned : "+" + cleaned;
 }
 
 function hashOTP(code) {
   return crypto.createHash("sha256").update(String(code)).digest("hex");
 }
+
+function generateToken(customer) {
+  return jwt.sign({ 
+    id: customer.id, 
+    phone: customer.phone,
+    role: 'customer' 
+  }, JWT_SECRET, { expiresIn: '30d' });
+}
+
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.status(401).json({ error: "Token requis" });
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: "Token invalide ou expiré" });
+    req.user = user;
+    next();
+  });
+};
 
 function normalizeSettings(settings = {}) {
   const rawHeroImages = Array.isArray(settings.heroImages)
@@ -548,22 +578,21 @@ function normalizeOrderPayload(payload) {
   })).filter(item => item.productName && item.quantity > 0) : [];
 
   const customerPhone = String(payload.customerPhone || "").trim();
-  const firebaseUid = trimOrNull(payload.firebaseUid);
+  const customerId = payload.customerId || null;
   const latitude = parseOptionalNumber(payload.latitude);
   const longitude = parseOptionalNumber(payload.longitude);
   const locationAccuracy = parseOptionalNumber(payload.locationAccuracy);
   const locationTimestamp = trimOrNull(payload.locationTimestamp);
   const total = parseMoney(payload.total, NaN);
-  if (!customerPhone) throw new Error("Customer phone is required");
-  if (!firebaseUid) throw new Error("Authenticated user is required");
+  if (!customerPhone && !customerId) throw new Error("Customer identification is required");
   if (!items.length) throw new Error("Cart items are required");
   if (!Number.isFinite(total) || total <= 0) throw new Error("Total is required");
 
   return {
     customerName: String(payload.customerName || "").trim(),
     customerPhone,
+    customerId,
     customerEmail: trimOrNull(payload.customerEmail),
-    firebaseUid,
     authProvider: payload.authProvider || 'phone',
     mode: payload.mode === "pickup" ? "pickup" : "delivery",
     address: trimOrNull(payload.address),
@@ -1073,6 +1102,10 @@ async function loadMenuSafe() {
 async function findExistingCustomer(client, order) {
   const clauses = [];
   const values = [];
+  if (order.customerId) {
+    values.push(order.customerId);
+    clauses.push(`id = $${values.length}`);
+  }
   if (order.customerPhone) {
     values.push(order.customerPhone);
     clauses.push(`phone = $${values.length}`);
@@ -1080,10 +1113,6 @@ async function findExistingCustomer(client, order) {
   if (order.customerEmail) {
     values.push(order.customerEmail);
     clauses.push(`email = $${values.length}`);
-  }
-  if (order.firebaseUid) {
-    values.push(order.firebaseUid);
-    clauses.push(`firebase_uid = $${values.length}`);
   }
   if (!clauses.length) return null;
   const result = await client.query(`
@@ -1732,21 +1761,23 @@ async function listDeviceTokens() {
   });
 }
 
-async function upsertDeviceToken({ firebaseUid = "", phone = "", platform = "android", token = "" } = {}) {
+async function upsertDeviceToken({ customerId = null, firebaseUid = "", phone = "", platform = "android", token = "" } = {}) {
   return withDatabase(async () => {
     const cleanToken = String(token || "").trim();
     if (!cleanToken) throw new Error("Device token is required");
     const result = await dbPool.query(`
-      INSERT INTO device_tokens (firebase_uid, phone, platform, token, updated_at)
-      VALUES ($1, $2, $3, $4, NOW())
+      INSERT INTO device_tokens (customer_id, firebase_uid, phone, platform, token, updated_at)
+      VALUES ($1, $2, $3, $4, $5, NOW())
       ON CONFLICT (token)
       DO UPDATE SET
+        customer_id = EXCLUDED.customer_id,
         firebase_uid = EXCLUDED.firebase_uid,
         phone = EXCLUDED.phone,
         platform = EXCLUDED.platform,
         updated_at = NOW()
       RETURNING *
     `, [
+      customerId || null,
       trimOrNull(firebaseUid),
       trimOrNull(phone),
       String(platform || "android").trim() || "android",
@@ -2072,6 +2103,7 @@ function normalizeMenu(menu) {
       available: product.available !== false,
       desc: String(product.desc || "").trim(),
       imageUrl: String(product.imageUrl || "").trim(),
+      thumbnailUrl: String(product.thumbnailUrl || product.imageUrl || "").trim(),
       sortOrder: Number.isFinite(Number(product.sortOrder)) ? Number(product.sortOrder) : index,
       options: Array.isArray(product.options) ? (() => {
         const legacyChoices = [];
@@ -2327,7 +2359,7 @@ app.get("/api/notifications", asyncHandler(async (req, res) => {
   res.json({ notifications });
 }));
 
-app.post("/api/orders", asyncHandler(async (req, res) => {
+app.post("/api/orders", authenticateToken, asyncHandler(async (req, res) => {
   const settings = await loadSettingsSafe();
   if (!settings.isStoreOpen) {
     return res.status(409).json({
@@ -2335,7 +2367,7 @@ app.post("/api/orders", asyncHandler(async (req, res) => {
       message: settings.closedMessage
     });
   }
-  const order = normalizeOrderPayload(req.body);
+  const order = normalizeOrderPayload({ ...req.body, customerId: req.user.id });
   const saved = await createOrderRecord(order);
   res.status(201).json(saved);
 }));
@@ -2400,6 +2432,7 @@ async function sendInfobipSMS(to, message) {
 
 app.post("/api/auth/phone/start", asyncHandler(async (req, res) => {
   const { phone } = req.body;
+  const ip = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
   if (!phone) return res.status(400).json({ error: "Numéro de téléphone requis" });
   
   const normalized = normalizeMoroccoPhone(phone);
@@ -2412,26 +2445,47 @@ app.post("/api/auth/phone/start", asyncHandler(async (req, res) => {
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
 
   await withDatabase(async () => {
-    // Rate limit check: last OTP sent < 60 seconds ago
-    const lastOtp = await dbPool.query(
+    // 1. Rate limit: 60 seconds per phone
+    const recentPhoneOtp = await dbPool.query(
       "SELECT created_at FROM phone_otps WHERE phone = $1 AND created_at > NOW() - INTERVAL '60 seconds' LIMIT 1",
       [normalized]
     );
-    if (lastOtp.rows.length > 0) {
+    if (recentPhoneOtp.rows.length > 0) {
       throw new Error("Veuillez attendre 60 secondes avant de demander un nouveau code");
     }
 
+    // 2. Anti-spam: Max 3 requests per phone per hour
+    const hourlyPhoneOtpCount = await dbPool.query(
+      "SELECT COUNT(*) FROM phone_otps WHERE phone = $1 AND created_at > NOW() - INTERVAL '1 hour'",
+      [normalized]
+    );
+    if (parseInt(hourlyPhoneOtpCount.rows[0].count) >= 3) {
+      throw new Error("Trop de tentatives pour ce numéro. Réessayez dans une heure.");
+    }
+
+    // 3. Anti-spam: Max 10 requests per IP per hour
+    const hourlyIpOtpCount = await dbPool.query(
+      "SELECT COUNT(*) FROM phone_otps WHERE ip_address = $1 AND created_at > NOW() - INTERVAL '1 hour'",
+      [ip]
+    );
+    if (parseInt(hourlyIpOtpCount.rows[0].count) >= 10) {
+      throw new Error("Trop de requêtes depuis votre connexion. Réessayez plus tard.");
+    }
+
     await dbPool.query(
-      "INSERT INTO phone_otps (phone, code_hash, expires_at) VALUES ($1, $2, $3)",
-      [normalized, codeHash, expiresAt]
+      "INSERT INTO phone_otps (phone, code_hash, expires_at, ip_address) VALUES ($1, $2, $3, $4)",
+      [normalized, codeHash, expiresAt, ip]
     );
   });
 
-  const message = `Votre code 3P Chicken Pops est ${code}. Il expire dans 5 minutes.`;
-  await sendInfobipSMS(normalized, message);
-  
-  console.log(`[OTP] Sent to ${normalized}`);
-  res.json({ ok: true });
+  try {
+    const message = `Votre code 3P Chicken Pops est ${code}. Il expire dans 5 minutes.`;
+    await sendInfobipSMS(normalized, message);
+    console.log(`[OTP] Sent to ${normalized}`);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: "Erreur lors de l'envoi du SMS. Veuillez réessayer." });
+  }
 }));
 
 app.post("/api/auth/phone/verify", asyncHandler(async (req, res) => {
@@ -2457,17 +2511,21 @@ app.post("/api/auth/phone/verify", asyncHandler(async (req, res) => {
       throw new Error("Code incorrect");
     }
     
+    // Mark as verified
     await dbPool.query("UPDATE phone_otps SET verified = TRUE WHERE id = $1", [otpRecord.id]);
     
-    // Auto-authenticate/Upsert customer
-    return await authenticateCustomer({
+    // Upsert customer
+    const customer = await authenticateCustomer({
       phone: normalized,
       name: name || "",
       provider: "phone"
     });
+
+    const token = generateToken(customer);
+    return { customer, token };
   });
 
-  res.json({ ok: true, customer: result });
+  res.json({ ok: true, ...result });
 }));
 
 app.post("/api/users/upsert", asyncHandler(async (req, res) => {
