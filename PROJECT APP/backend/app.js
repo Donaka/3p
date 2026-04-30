@@ -1,10 +1,8 @@
-import { auth, messaging, getToken, onMessage } from "./firebase-config.js";
-import {
-  RecaptchaVerifier,
-  signInWithPhoneNumber,
-  onAuthStateChanged,
-  signOut
-} from "https://www.gstatic.com/firebasejs/10.9.0/firebase-auth.js";
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+
+const SUPABASE_URL = "https://your-project-url.supabase.co"; // User must replace this
+const SUPABASE_ANON_KEY = "your-anon-key"; // User must replace this
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const FCM_VAPID_KEY = "Z02lSpdHObXSkAYQOqbEVPF3qO40B7PkzieHdNsYG9k";
 const shopWhatsAppNumber = "212688943959";
@@ -361,23 +359,8 @@ const splashScreen = document.querySelector("#splashScreen");
 const accountStatus = document.querySelector("#accountStatus");
 const accountName = document.querySelector("#accountName");
 const accountHelp = document.querySelector("#accountHelp");
-const phoneLoginForm = document.querySelector("#phoneLoginForm");
-const loginPhone = document.querySelector("#loginPhone");
-const loginName = document.querySelector("#loginName");
-const phoneLoginButton = document.querySelector("#phoneLoginButton");
-const accountLoginError = document.querySelector("#accountLoginError");
+const googleLoginButton = document.querySelector("#googleLoginButton");
 const customerLogout = document.querySelector("#customerLogout");
-const otpFieldWrap = document.querySelector("#otpFieldWrap");
-const otpCode = document.querySelector("#otpCode");
-const verifyCodeButton = document.querySelector("#verifyCodeButton");
-const otpSentPreview = document.querySelector("#otpSentPreview");
-const otpBoxes = [...document.querySelectorAll("[data-otp-index]")];
-const editPhoneButton = document.querySelector("#editPhoneButton");
-const resendCodeButton = document.querySelector("#resendCodeButton");
-const resendCountdown = document.querySelector("#resendCountdown");
-const otpSupportButton = document.querySelector("#otpSupportButton");
-const recaptchaContainer = document.querySelector("#recaptchaContainer");
-const recaptchaFallback = document.querySelector("#recaptchaFallback");
 const locationGate = document.querySelector("#locationGate");
 const locationGateMessage = document.querySelector("#locationGateMessage");
 const allowLocationButton = document.querySelector("#allowLocationButton");
@@ -1269,96 +1252,34 @@ function finalizeCustomerBootstrap(user = null, errorMessage = "") {
   }
 }
 
-async function startPhoneLogin() {
-  const phone = normalizeMoroccoPhone(loginPhone?.value);
-  pendingCustomerName = String(loginName?.value || "").trim();
-  if (!phone) {
-    showLoginError("Numero invalide. Utilisez +212, 06 ou 07.");
-    return;
-  }
-
-  setLoginButtonsBusy(true, "Envoi...");
-  clearLoginError();
-
-  try {
-    console.log("Using Firebase Web phone login");
-    const verifier = ensureRecaptchaMode(false);
-    confirmationResultRef = await signInWithPhoneNumber(auth, phone, verifier);
-    if (loginPhone) loginPhone.value = phone;
-    updateOtpStepUi(phone);
-    startResendCountdown(30);
-    showToast("Code SMS envoye");
-  } catch (error) {
-    console.error("Phone login send code failed:", error);
-    try {
-      const verifier = ensureRecaptchaMode(true);
-      confirmationResultRef = await signInWithPhoneNumber(auth, phone, verifier);
-      if (loginPhone) loginPhone.value = phone;
-      updateOtpStepUi(phone);
-      startResendCountdown(30);
-      showToast("Code SMS envoye");
-    } catch (fallbackError) {
-      console.error("Phone login visible recaptcha failed:", fallbackError);
-      showLoginError(getAuthErrorMessage(fallbackError, getAuthErrorMessage(error, "Impossible d'envoyer le SMS.")));
-    }
-  } finally {
-    setLoginButtonsBusy(false, confirmationResultRef ? "Renvoyer le code" : "Envoyer le code");
-  }
-}
-
-async function verifyPhoneOtp() {
-  const code = String(otpCode?.value || "").replace(/[^\d]/g, "").slice(0, 6);
-  if (!confirmationResultRef) {
-    showLoginError("Demandez d'abord votre code SMS.");
-    return;
-  }
-  if (!/^\d{6}$/.test(code)) {
-    showLoginError("Entrez le code OTP a 6 chiffres.");
-    return;
-  }
-  setLoginButtonsBusy(true, "Verification...");
+async function signInWithGoogle() {
+  setLoginButtonsBusy(true, "Connexion...");
   clearLoginError();
   try {
-    const result = await confirmationResultRef.confirm(code);
-    confirmationResultRef = null;
-    const user = mapFirebasePhoneUser(result?.user);
-    console.log("OTP success:", user);
-    if (user) {
-      setCustomerSession(user);
-      const locationReady = await resolveLocationGate();
-      if (locationReady) {
-        switchView("home");
-        hideSplashScreen();
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: window.location.origin
       }
-    }
-    resetOtpStep();
-    showToast("Numero verifie");
+    });
+    if (error) throw error;
   } catch (error) {
-    console.error("OTP verification failed:", error);
-    showLoginError(getAuthErrorMessage(error, "Code OTP invalide."));
+    console.error("Google login failed:", error);
+    showLoginError("Échec de la connexion avec Google.");
   } finally {
-    setLoginButtonsBusy(false, "Renvoyer le code");
+    setLoginButtonsBusy(false, "Continuer avec Google");
   }
 }
 
-async function logoutPhoneCustomer() {
+async function logout() {
   try {
-    await signOut(auth);
+    await supabase.auth.signOut();
   } catch (error) {
-    console.warn("Phone logout failed:", error);
+    console.warn("Logout failed:", error);
   }
-  confirmationResultRef = null;
-  hideLocationGate();
-  if (loginName) {
-    loginName.removeAttribute("disabled");
-    loginName.value = "";
-  }
-  if (otpCode) otpCode.value = "";
-  otpFieldWrap?.classList.add("hidden");
-  verifyCodeButton?.classList.add("hidden");
   setCustomerSession(null);
   switchView("account");
-  showToast("Deconnecte");
+  showToast("Déconnecté");
 }
 
 function getCustomerId() {
@@ -3359,6 +3280,21 @@ splashScreen?.addEventListener("animationend", event => {
 
 armSplashFailsafe();
 
+async function initSupabaseAuth() {
+  const { data: { session } } = await supabase.auth.getSession();
+  setCustomerSession(session?.user || null);
+  
+  supabase.auth.onAuthStateChange((event, session) => {
+    setCustomerSession(session?.user || null);
+    if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+      finalizeCustomerBootstrap(session?.user);
+    }
+  });
+
+  googleLoginButton?.addEventListener("click", signInWithGoogle);
+  customerLogout?.addEventListener("click", logout);
+}
+
 async function bootstrapApp() {
   try {
     initLanguageChoice();
@@ -3376,7 +3312,7 @@ async function bootstrapApp() {
     }, 10000);
     updateInstallUi();
     await Promise.allSettled([
-      initFirebaseAuth(),
+      initSupabaseAuth(),
       loadMenu()
     ]);
     await preloadImagesAndHideSplash();

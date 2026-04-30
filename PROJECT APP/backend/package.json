@@ -8,9 +8,11 @@
     "start": "node server.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.105.1",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "firebase-admin": "^12.1.0",
+    "jsonwebtoken": "^9.0.3",
     "luxon": "^3.7.2",
     "pg": "^8.16.3"
   }

@@ -172,12 +172,17 @@ async function ensureDatabase() {
             name TEXT NOT NULL DEFAULT '',
             phone TEXT,
             email TEXT,
+            supabase_uid TEXT UNIQUE,
             firebase_uid TEXT,
             total_orders INTEGER NOT NULL DEFAULT 0,
             total_spent NUMERIC(12, 2) NOT NULL DEFAULT 0,
             last_order_at TIMESTAMPTZ,
-            auth_provider TEXT NOT NULL DEFAULT 'phone'
+            auth_provider TEXT NOT NULL DEFAULT 'google'
           );
+        `);
+        await client.query(`
+          ALTER TABLE orders ADD COLUMN IF NOT EXISTS supabase_uid TEXT;
+          CREATE INDEX IF NOT EXISTS idx_orders_supabase_uid ON orders(supabase_uid);
         `);
         await client.query(`
           CREATE UNIQUE INDEX IF NOT EXISTS customers_phone_unique
@@ -547,15 +552,24 @@ function generateToken(customer) {
   }, JWT_SECRET, { expiresIn: '30d' });
 }
 
+const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET || JWT_SECRET;
+
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
   if (!token) return res.status(401).json({ error: "Token requis" });
 
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.status(403).json({ error: "Token invalide ou expiré" });
-    req.user = user;
-    next();
+  jwt.verify(token, SUPABASE_JWT_SECRET, (err, user) => {
+    if (err) {
+      jwt.verify(token, JWT_SECRET, (err2, user2) => {
+        if (err2) return res.status(403).json({ error: "Token invalide ou expiré" });
+        req.user = user2;
+        next();
+      });
+    } else {
+      req.user = user;
+      next();
+    }
   });
 };
 
@@ -1252,22 +1266,27 @@ async function upsertCustomer(client, order) {
   return result.rows[0];
 }
 
-async function authenticateCustomer({ phone = "", name = "", email = "", firebaseUid = "", provider = "phone" } = {}) {
+async function authenticateCustomer({ phone = "", name = "", email = "", firebaseUid = "", supabaseUid = "", provider = "google" } = {}) {
   return withDatabase(async () => {
     const normalizedPhone = normalizeMoroccoPhone(phone);
     const normalizedName = String(name || "").trim();
     const normalizedEmail = String(email || "").trim().toLowerCase();
     
-    if (!firebaseUid && !normalizedPhone) {
-      throw new Error("Phone number or Firebase UID is required");
+    if (!supabaseUid && !normalizedEmail && !normalizedPhone) {
+      throw new Error("Supabase UID, Email or Phone is required");
     }
 
     let customer = null;
-    if (firebaseUid) {
-      const res = await dbPool.query("SELECT * FROM customers WHERE firebase_uid = $1 LIMIT 1", [firebaseUid]);
+    if (supabaseUid) {
+      const res = await dbPool.query("SELECT * FROM customers WHERE supabase_uid = $1 LIMIT 1", [supabaseUid]);
       customer = res.rows[0];
     }
     
+    if (!customer && normalizedEmail) {
+      const res = await dbPool.query("SELECT * FROM customers WHERE email = $1 LIMIT 1", [normalizedEmail]);
+      customer = res.rows[0];
+    }
+
     if (!customer && normalizedPhone) {
       const res = await dbPool.query("SELECT * FROM customers WHERE phone = $1 LIMIT 1", [normalizedPhone]);
       customer = res.rows[0];
@@ -1279,20 +1298,20 @@ async function authenticateCustomer({ phone = "", name = "", email = "", firebas
         SET
           name = COALESCE(NULLIF($2, ''), name),
           email = COALESCE(NULLIF($3, ''), email),
-          firebase_uid = COALESCE(NULLIF($4, ''), firebase_uid),
+          supabase_uid = COALESCE(NULLIF($4, ''), supabase_uid),
           auth_provider = COALESCE(NULLIF($5, ''), auth_provider),
           updated_at = NOW()
         WHERE id = $1
         RETURNING *
-      `, [customer.id, normalizedName, normalizedEmail, firebaseUid, provider]);
+      `, [customer.id, normalizedName, normalizedEmail, supabaseUid, provider]);
       return mapCustomerSession(res.rows[0]);
     }
 
     const res = await dbPool.query(`
-      INSERT INTO customers (name, phone, email, firebase_uid, auth_provider)
+      INSERT INTO customers (name, phone, email, supabase_uid, auth_provider)
       VALUES ($1, $2, $3, $4, $5)
       RETURNING *
-    `, [normalizedName, normalizedPhone, normalizedEmail, firebaseUid, provider]);
+    `, [normalizedName, normalizedPhone, normalizedEmail, supabaseUid, provider]);
     return mapCustomerSession(res.rows[0]);
   });
 }
@@ -1383,9 +1402,9 @@ async function createOrderRecord(order) {
       // Re-calculate delivery fee on backend for security
       let deliveryFee = 0;
       if (order.mode === "delivery") {
-        const minPrice = Number(settings.minimumDeliveryPrice);
-        const baseDist = Number(settings.baseDeliveryDistanceKm);
-        const extraPrice = Number(settings.extraKmPrice);
+        const minPrice = Number(settings.minimumDeliveryPrice) || 10;
+        const baseDist = Number(settings.baseDeliveryDistanceKm) || 0;
+        const extraPrice = Number(settings.extraKmPrice) || 0;
         
         deliveryFee = minPrice;
         if (order.distanceKm > baseDist) {
@@ -1393,24 +1412,25 @@ async function createOrderRecord(order) {
           deliveryFee += extraKm * extraPrice;
         }
         
-        if (deliveryFee === 0 && minPrice > 0) {
-          console.warn("[Order] Delivery fee calculated as 0 but minPrice is", minPrice, ". Using minPrice.");
+        if (deliveryFee <= 0 && minPrice > 0) {
           deliveryFee = minPrice;
         }
-        console.log(`[Order] Delivery Fee Recalculated: ${deliveryFee} (Dist: ${order.distanceKm}km, Min: ${minPrice})`);
+        console.log(`[Order] Delivery Fee Verified: ${deliveryFee} MAD (Min: ${minPrice}, Dist: ${order.distanceKm}km)`);
       }
       
       const subtotal = order.items.reduce((sum, i) => sum + i.lineTotal, 0);
       const total = Math.max(0, subtotal + deliveryFee - (order.discount || 0));
+
+      const supabaseUid = req.user?.sub || req.user?.id || null;
 
       const orderResult = await client.query(`
         INSERT INTO orders (
           customer_name, customer_phone, customer_email, firebase_uid,
           mode, address, latitude, longitude, location_accuracy, location_timestamp, distance_km, delivery_zone_radius, accepted_at, ready_at,
           accepted_until, preparing_until, estimated_delivery_minutes,
-          delivery_fee, subtotal, discount, total, promo_code, whatsapp_message, status, customer_id
+          delivery_fee, subtotal, discount, total, promo_code, whatsapp_message, status, customer_id, supabase_uid
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL, $13, $14, $15, NULL, $16, $17, $18, $19, $20, $21, $22, $23)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL, $13, $14, $15, NULL, $16, $17, $18, $19, $20, $21, $22, $23, $24)
         RETURNING *
       `, [
         order.customerName || "",
@@ -1435,7 +1455,8 @@ async function createOrderRecord(order) {
         order.promoCode,
         order.whatsappMessage,
         initialStatus,
-        customer.id
+        customer.id,
+        supabaseUid
       ]);
       let savedOrder = orderResult.rows[0];
       savedOrder.estimated_time = estimatedTime;
@@ -1652,11 +1673,15 @@ async function listCustomers(search = "") {
   });
 }
 
-async function listCustomerOrders({ firebaseUid = "", email = "", phone = "" } = {}) {
+async function listCustomerOrders({ firebaseUid = "", email = "", phone = "", supabaseUid = "" } = {}) {
   return withDatabase(async () => {
     const settings = await loadSettingsRowDirect();
     const values = [];
     const conditions = [];
+    if (supabaseUid) {
+      values.push(supabaseUid);
+      conditions.push(`o.supabase_uid = $${values.length}`);
+    }
     if (firebaseUid) {
       values.push(firebaseUid);
       conditions.push(`o.firebase_uid = $${values.length}`);
@@ -1667,7 +1692,6 @@ async function listCustomerOrders({ firebaseUid = "", email = "", phone = "" } =
     }
     if (phone) {
       const normalizedPhone = normalizeMoroccoPhone(phone);
-      console.log("Fetch orders for:", normalizedPhone);
       values.push(normalizedPhone);
       conditions.push(`o.customer_phone = $${values.length}`);
     }
@@ -1715,12 +1739,16 @@ async function listCustomerOrders({ firebaseUid = "", email = "", phone = "" } =
   });
 }
 
-async function getCustomerOrderById(orderId, { firebaseUid = "", email = "", phone = "" } = {}) {
+async function getCustomerOrderById(orderId, { firebaseUid = "", email = "", phone = "", supabaseUid = "" } = {}) {
   return withDatabase(async () => {
     const settings = await loadSettingsRowDirect();
     const values = [orderId];
     const conditions = ["o.id = $1"];
     const identityClauses = [];
+    if (supabaseUid) {
+      values.push(supabaseUid);
+      identityClauses.push(`o.supabase_uid = $${values.length}`);
+    }
     if (firebaseUid) {
       values.push(firebaseUid);
       identityClauses.push(`o.firebase_uid = $${values.length}`);
