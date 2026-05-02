@@ -363,6 +363,7 @@ const admin = {
                 <div class="form-row"><label>Son 3P</label><input type="checkbox" id="pushCustomSound" checked></div>
                 <div class="form-row"><label>Cible</label><select id="pushTarget"><option value="ALL">Tous</option></select></div>
                 <div class="form-row"><label>Image URL</label><input type="url" id="pushImageUrl"></div>
+                <div class="form-row"><label>Deep link</label><input type="url" id="pushDeepLink" placeholder="https://... ou threep://..."></div>
                 <div class="form-row"><label>Type d'action</label><select id="pushAction">
                     <option value="home">Accueil</option>
                     <option value="product">Produit</option>
@@ -770,12 +771,14 @@ const admin = {
             action: document.getElementById('pushAction')?.value || "home",
             linkedProductId: document.getElementById('pushProductId')?.value || "",
             linkedCategoryId: document.getElementById('pushCategoryId')?.value || "",
+            deepLink: document.getElementById('pushDeepLink')?.value?.trim() || "",
             orderId: document.getElementById('pushOrderId')?.value || "",
             useCustomSound: document.getElementById('pushCustomSound')?.checked ?? true
         };
 
         try {
-            const res = await this.api('/api/notify', 'POST', payload);
+            const endpoint = payload.customerId === "ALL" ? '/api/notify-all' : '/api/notify';
+            const res = await this.api(endpoint, 'POST', payload);
             alert(`Envoyé ! Succès: ${res.count}, Échecs: ${res.failureCount}`);
         } catch (e) {
             console.error('Push failed', e);
@@ -792,7 +795,7 @@ const admin = {
         if (!confirm('Voulez-vous vraiment effacer TOUTES les notifications pour TOUS les utilisateurs ? Cette action est irréversible.')) return;
         
         try {
-            await this.api('/api/notifications/clear-all', 'POST');
+            await this.api('/api/notifications/clear-all', 'DELETE');
             this.showToast('Toutes les notifications ont été effacées.');
             this.loadPushInfo();
         } catch (e) {

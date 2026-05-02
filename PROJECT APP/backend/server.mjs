@@ -377,6 +377,7 @@ async function ensureDatabase() {
         await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS target_customer_id TEXT;`);
         await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS linked_product_id TEXT;`);
         await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS linked_category_id TEXT;`);
+        await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS deep_link TEXT;`);
         await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS cta_text TEXT;`);
         await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS starts_at TIMESTAMPTZ;`);
         await client.query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS ends_at TIMESTAMPTZ;`);
@@ -463,6 +464,17 @@ async function ensureDatabase() {
         await client.query(`ALTER TABLE phone_otps ADD COLUMN IF NOT EXISTS ip_address TEXT;`);
         await client.query(`CREATE INDEX IF NOT EXISTS phone_otps_phone_idx ON phone_otps(phone);`);
         await client.query(`CREATE INDEX IF NOT EXISTS phone_otps_ip_idx ON phone_otps(ip_address);`);
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS error_logs (
+            id BIGSERIAL PRIMARY KEY,
+            message TEXT NOT NULL,
+            stack TEXT,
+            user_id TEXT,
+            context_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+        `);
+        await client.query(`CREATE INDEX IF NOT EXISTS error_logs_created_at_idx ON error_logs(created_at DESC);`);
         console.log("PostgreSQL schema ready: settings, menu_snapshots, orders, order_items, customers, notifications, device_tokens, option_groups, option_items, product_option_groups");
       } finally {
         client.release();
@@ -562,6 +574,14 @@ const authenticateToken = (req, res, next) => {
       method: req.method,
       path: req.originalUrl || req.url
     });
+    createErrorLog({
+      message: "Missing Authorization header",
+      context: {
+        scope: "auth",
+        method: req.method,
+        path: req.originalUrl || req.url
+      }
+    }).catch(error => console.error("[ErrorLog] Failed", error.message));
     return res.status(401).json({ error: "Token requis" });
   }
 
@@ -575,6 +595,15 @@ const authenticateToken = (req, res, next) => {
             supabaseError: err.message,
             legacyError: err2.message
           });
+          createErrorLog({
+            message: "Token verification failed",
+            stack: `${err.message}\n${err2.message}`,
+            context: {
+              scope: "auth",
+              method: req.method,
+              path: req.originalUrl || req.url
+            }
+          }).catch(error => console.error("[ErrorLog] Failed", error.message));
         }
         if (err2) return res.status(403).json({ error: "Token invalide ou expiré" });
         console.log("[Auth] Legacy token verification success", {
@@ -817,6 +846,7 @@ function mapNotificationRow(row) {
     targetCustomerId: row.target_customer_id || "",
     linkedProductId: row.linked_product_id || "",
     linkedCategoryId: row.linked_category_id || "",
+    deepLink: row.deep_link || "",
     ctaText: row.cta_text || "",
     startsAt: row.starts_at || null,
     endsAt: row.ends_at || null,
@@ -1858,9 +1888,9 @@ async function createNotificationRecord(notification) {
   return withDatabase(async () => {
     const result = await dbPool.query(`
       INSERT INTO notifications (
-        title, message, image_url, target_customer_id, linked_product_id, linked_category_id, cta_text, starts_at, ends_at, active
+        title, message, image_url, target_customer_id, linked_product_id, linked_category_id, deep_link, cta_text, starts_at, ends_at, active
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
     `, [
       String(notification.title || "").trim(),
@@ -1869,6 +1899,7 @@ async function createNotificationRecord(notification) {
       trimOrNull(notification.targetCustomerId),
       trimOrNull(notification.linkedProductId),
       trimOrNull(notification.linkedCategoryId),
+      trimOrNull(notification.deepLink),
       trimOrNull(notification.ctaText),
       trimOrNull(notification.startsAt),
       trimOrNull(notification.endsAt),
@@ -1881,6 +1912,32 @@ async function createNotificationRecord(notification) {
 async function clearAllNotifications() {
   return withDatabase(async () => {
     await dbPool.query("DELETE FROM notifications");
+  });
+}
+
+async function createErrorLog({ message = "", stack = "", userId = "", context = {} } = {}) {
+  const safeMessage = String(message || "Unknown error").slice(0, 4000);
+  const safeStack = stack ? String(stack).slice(0, 12000) : null;
+  const safeUserId = trimOrNull(userId);
+  const safeContext = context && typeof context === "object" ? context : {};
+
+  if (!dbPool) {
+    console.error("[ClientError]", safeMessage, safeStack || "");
+    return null;
+  }
+
+  return withDatabase(async () => {
+    const result = await dbPool.query(`
+      INSERT INTO error_logs (message, stack, user_id, context_json)
+      VALUES ($1, $2, $3, $4::jsonb)
+      RETURNING id, created_at
+    `, [
+      safeMessage,
+      safeStack,
+      safeUserId,
+      JSON.stringify(safeContext)
+    ]);
+    return result.rows[0];
   });
 }
 
@@ -1940,6 +1997,7 @@ async function upsertDeviceToken({ customerId = null, firebaseUid = "", phone = 
   return withDatabase(async () => {
     const cleanToken = String(token || "").trim();
     if (!cleanToken) throw new Error("Device token is required");
+    const numericCustomerId = Number(customerId);
     const result = await dbPool.query(`
       INSERT INTO device_tokens (customer_id, firebase_uid, phone, platform, token, updated_at)
       VALUES ($1, $2, $3, $4, $5, NOW())
@@ -1952,7 +2010,7 @@ async function upsertDeviceToken({ customerId = null, firebaseUid = "", phone = 
         updated_at = NOW()
       RETURNING *
     `, [
-      customerId || null,
+      Number.isSafeInteger(numericCustomerId) ? numericCustomerId : null,
       trimOrNull(firebaseUid),
       trimOrNull(phone),
       String(platform || "android").trim() || "android",
@@ -2366,7 +2424,25 @@ app.get(["/admin", "/admin.html"], (req, res) => {
 });
 
 const asyncHandler = (fn) => (req, res, next) => {
-  Promise.resolve(fn(req, res, next)).catch(next);
+  Promise.resolve(fn(req, res, next)).catch(async (error) => {
+    if (req.path !== "/api/log-error") {
+      try {
+        await createErrorLog({
+          message: error.message,
+          stack: error.stack,
+          userId: req.user?.sub || req.user?.id || req.body?.userId || "",
+          context: {
+            scope: "backend",
+            method: req.method,
+            path: req.originalUrl || req.url
+          }
+        });
+      } catch (logError) {
+        console.error("[ErrorLog] Failed", logError.message);
+      }
+    }
+    next(error);
+  });
 };
 
 app.get("/api/health", (req, res) => {
@@ -2513,12 +2589,37 @@ app.post("/api/notifications/:id/seen", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
+app.post("/api/log-error", asyncHandler(async (req, res) => {
+  const saved = await createErrorLog({
+    message: req.body.message,
+    stack: req.body.stack,
+    userId: req.body.userId,
+    context: req.body.context
+  });
+  res.status(201).json({ ok: true, id: saved?.id || null });
+}));
+
 app.post("/api/notify", asyncHandler(async (req, res) => {
   if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
   // Notification logic...
   // (I'll keep it simple for now, assuming existing functions are used)
   const result = await handleNotifyRequest(req.body); 
   res.json(result);
+}));
+
+app.post("/api/notify-all", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  const result = await handleNotifyRequest({
+    ...req.body,
+    customerId: "ALL"
+  });
+  res.json(result);
+}));
+
+app.delete("/api/notifications/clear-all", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  await clearAllNotifications();
+  res.json({ success: true });
 }));
 
 app.post("/api/notifications/clear-all", asyncHandler(async (req, res) => {
@@ -2802,6 +2903,14 @@ app.get("/api/customers", asyncHandler(async (req, res) => {
   res.json({ customers });
 }));
 
+app.use((error, req, res, next) => {
+  console.error("[API Error]", error);
+  if (res.headersSent) return next(error);
+  res.status(error.status || 500).json({
+    error: error.message || "Internal server error"
+  });
+});
+
 // Fallback for any other API or static files
 app.use((req, res) => {
   res.status(404).send("Not found");
@@ -2824,12 +2933,12 @@ app.listen(port, () => {
 
 // Helper for notify (since we are refactoring)
 async function handleNotifyRequest(payload) {
-  const { customerId, phone, firebaseUid, title, message, imageUrl, linkedProductId, linkedCategoryId } = payload;
+  const { customerId, phone, firebaseUid, title, message, imageUrl, linkedProductId, linkedCategoryId, deepLink } = payload;
   if (!adminInitialized) throw new Error("Firebase Admin not configured");
   if (!title || !message) throw new Error("Missing title or message");
   
   const savedNotification = await createNotificationRecord({
-    title, message, imageUrl, linkedProductId, linkedCategoryId,
+    title, message, imageUrl, linkedProductId, linkedCategoryId, deepLink,
     targetCustomerId: customerId === "ALL" ? "" : (customerId || "")
   });
   
@@ -2844,7 +2953,14 @@ async function handleNotifyRequest(payload) {
     }
   }
 
-  if (targetTokens.size === 0) throw new Error("No devices found");
+  if (targetTokens.size === 0) {
+    return {
+      success: true,
+      count: 0,
+      failureCount: 0,
+      notification: savedNotification
+    };
+  }
 
   const messages = Array.from(targetTokens).map(token => ({
     token,
@@ -2875,9 +2991,10 @@ async function handleNotifyRequest(payload) {
     },
     data: { 
       notificationId: String(savedNotification.id),
-      type: String(payload.type || "home"),
+      type: String(payload.type || payload.action || "home"),
       ...(linkedProductId ? { productId: String(linkedProductId) } : {}),
       ...(linkedCategoryId ? { categoryId: String(linkedCategoryId) } : {}),
+      ...(deepLink ? { deepLink: String(deepLink) } : {}),
       ...(payload.orderId ? { orderId: String(payload.orderId) } : {}),
       ...(payload.imageUrl ? { imageUrl: payload.imageUrl } : {})
     }
@@ -2887,6 +3004,7 @@ async function handleNotifyRequest(payload) {
   return { 
     success: true, 
     count: batchResponse.successCount, 
-    failureCount: batchResponse.failureCount 
+    failureCount: batchResponse.failureCount,
+    notification: savedNotification
   };
 }
