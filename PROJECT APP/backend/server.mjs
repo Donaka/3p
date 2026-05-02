@@ -642,7 +642,10 @@ const authenticateToken = (req, res, next) => {
         path: req.originalUrl || req.url
       }
     }).catch(error => console.error("[ErrorLog] Failed", error.message));
-    return res.status(401).json({ error: "Token requis" });
+    return res.status(401).json({
+      error: "TOKEN_REQUIRED",
+      message: "Veuillez vous reconnecter pour commander."
+    });
   }
 
   jwt.verify(token, SUPABASE_JWT_SECRET, (err, user) => {
@@ -665,7 +668,13 @@ const authenticateToken = (req, res, next) => {
             }
           }).catch(error => console.error("[ErrorLog] Failed", error.message));
         }
-        if (err2) return res.status(403).json({ error: "Token invalide ou expiré" });
+        if (err2) {
+          const expired = err.name === "TokenExpiredError" || err2.name === "TokenExpiredError";
+          return res.status(403).json({
+            error: expired ? "TOKEN_EXPIRED" : "TOKEN_INVALID",
+            message: "Veuillez vous reconnecter pour commander."
+          });
+        }
         console.log("[Auth] Legacy token verification success", {
           method: req.method,
           path: req.originalUrl || req.url,
@@ -1564,6 +1573,8 @@ async function createOrderRecord(order) {
           if (Number.isFinite(maxDeliveryKm) && maxDeliveryKm > 0 && deliveryDistanceKm > maxDeliveryKm) {
             const error = new Error(`Adresse hors zone de livraison (${deliveryDistanceKm.toFixed(2)} km)`);
             error.status = 400;
+            error.code = "DELIVERY_OUT_OF_ZONE";
+            error.distanceKm = deliveryDistanceKm;
             throw error;
           }
         }
@@ -3019,8 +3030,9 @@ app.use((error, req, res, next) => {
   console.error("[API Error]", error);
   if (res.headersSent) return next(error);
   res.status(error.status || 500).json({
-    error: error.message || "Internal server error",
-    message: error.message || "Internal server error"
+    error: error.code || error.message || "Internal server error",
+    message: error.message || "Internal server error",
+    ...(Number.isFinite(error.distanceKm) ? { distanceKm: error.distanceKm } : {})
   });
 });
 
