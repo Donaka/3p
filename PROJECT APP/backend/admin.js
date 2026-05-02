@@ -168,6 +168,10 @@ const admin = {
         console.log("Opening tab:", tab);
         
         const mainContent = document.querySelector('main.content');
+        if (!mainContent) {
+            console.error("Admin content container not found");
+            return;
+        }
         
         if (tab === 'orders') {
             this.startOrderPolling();
@@ -478,9 +482,20 @@ const admin = {
 
     async loadMenu() {
         console.log("Loading menu...");
+        if (this.currentTab !== 'menu') {
+            console.warn("Skipping menu render because menu tab is not active");
+            return;
+        }
+
+        const categoriesContainer = document.getElementById('categories-container');
+        const productsContainer = document.getElementById('products-container');
+        if (!categoriesContainer || !productsContainer) {
+            console.error("Menu container not found");
+            return;
+        }
+
         try {
-            const data = await this.api('/api/menu');
-            this.menu = data;
+            await this.fetchMenu();
             this.renderCategories();
             if (this.menu?.categories?.length > 0) {
                 const firstCat = this.menu.categories[0];
@@ -492,8 +507,25 @@ const admin = {
         }
     },
 
+    async fetchMenu() {
+        const data = await this.api('/api/menu');
+        this.menu = data || { categories: [], products: [] };
+        this.menu.categories = Array.isArray(this.menu.categories) ? this.menu.categories : [];
+        this.menu.products = Array.isArray(this.menu.products) ? this.menu.products : [];
+        return this.menu;
+    },
+
     renderCategories() {
         const container = document.getElementById('categories-container');
+        if (!container) {
+            console.error("Menu container not found");
+            return;
+        }
+        if (!this.menu?.categories) {
+            console.error("Menu data not loaded");
+            return;
+        }
+
         container.innerHTML = '';
         this.menu.categories.forEach(cat => {
             const name = cat.name || cat;
@@ -512,6 +544,15 @@ const admin = {
 
     renderProducts(categoryName) {
         const container = document.getElementById('products-container');
+        if (!container) {
+            console.error("Menu container not found");
+            return;
+        }
+        if (!this.menu?.products) {
+            console.error("Menu data not loaded");
+            return;
+        }
+
         container.innerHTML = '';
         const products = this.menu.products.filter(p => p.category === categoryName);
         
@@ -705,8 +746,8 @@ const admin = {
             const countEl = document.getElementById('pushDeviceCount');
             if (countEl) countEl.textContent = `${count} appareils enregistrés`;
             
-            // Also load menu to populate link targets
-            if (!this.menu) await this.loadMenu();
+            // Fetch menu data for notification link targets without rendering the menu tab.
+            if (!this.menu) await this.fetchMenu();
         } catch (e) {
             console.error("Failed to load push info", e);
             const countEl = document.getElementById('pushDeviceCount');
@@ -1274,4 +1315,8 @@ const admin = {
     }
 };
 
-admin.init();
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => admin.init());
+} else {
+    admin.init();
+}
