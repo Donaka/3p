@@ -214,7 +214,11 @@ async function ensureDatabase() {
             longitude DOUBLE PRECISION,
             location_accuracy DOUBLE PRECISION,
             location_timestamp TIMESTAMPTZ,
-            distance_km NUMERIC(10, 2) NOT NULL DEFAULT 0,
+            distance_km NUMERIC(10, 2),
+            order_type TEXT,
+            customer_lat DOUBLE PRECISION,
+            customer_lng DOUBLE PRECISION,
+            needs_manual_delivery_check BOOLEAN NOT NULL DEFAULT FALSE,
             delivery_zone_radius NUMERIC(10, 2),
             accepted_at TIMESTAMPTZ,
             ready_at TIMESTAMPTZ,
@@ -245,6 +249,11 @@ async function ensureDatabase() {
         await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS estimated_delivery_minutes INTEGER;`);
         await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS location_accuracy DOUBLE PRECISION;`);
         await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS location_timestamp TIMESTAMPTZ;`);
+        await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_type TEXT;`);
+        await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_lat DOUBLE PRECISION;`);
+        await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_lng DOUBLE PRECISION;`);
+        await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS needs_manual_delivery_check BOOLEAN NOT NULL DEFAULT FALSE;`);
+        await client.query(`ALTER TABLE orders ALTER COLUMN distance_km DROP NOT NULL;`);
         await client.query(`ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;`);
         await client.query(`
           ALTER TABLE orders
@@ -643,7 +652,7 @@ const authenticateToken = (req, res, next) => {
       }
     }).catch(error => console.error("[ErrorLog] Failed", error.message));
     return res.status(401).json({
-      error: "TOKEN_REQUIRED",
+      error: "AUTH_REQUIRED",
       message: "Veuillez vous reconnecter pour commander."
     });
   }
@@ -790,6 +799,8 @@ function normalizeOrderPayload(payload) {
   const customerId = payload.customerId || null;
   const latitude = parseOptionalNumber(payload.latitude);
   const longitude = parseOptionalNumber(payload.longitude);
+  const customerLat = parseOptionalNumber(payload.customer_lat ?? payload.customerLat ?? payload.customerLatitude ?? payload.latitude);
+  const customerLng = parseOptionalNumber(payload.customer_lng ?? payload.customerLng ?? payload.customerLongitude ?? payload.longitude);
   const locationAccuracy = parseOptionalNumber(payload.locationAccuracy);
   const locationTimestamp = trimOrNull(payload.locationTimestamp);
   const total = parseMoney(payload.total, NaN);
@@ -806,17 +817,21 @@ function normalizeOrderPayload(payload) {
     supabaseUid: trimOrNull(payload.supabaseUid),
     authProvider: payload.authProvider || 'phone',
     mode: payload.mode === "pickup" ? "pickup" : "delivery",
+    orderType: payload.mode === "pickup" ? "pickup" : "delivery",
     address: trimOrNull(payload.address),
     latitude,
     longitude,
+    customerLat,
+    customerLng,
     locationAccuracy,
     locationTimestamp,
-    distanceKm: parseMoney(payload.distanceKm),
+    distanceKm: parseOptionalNumber(payload.distanceKm),
     deliveryZoneRadius: parseOptionalNumber(payload.deliveryZoneRadius),
     deliveryFee: parseMoney(payload.deliveryFee),
     subtotal: parseMoney(payload.subtotal),
     discount: parseMoney(payload.discount),
     total,
+    needsManualDeliveryCheck: payload.needs_manual_delivery_check === true || payload.needsManualDeliveryCheck === true,
     promoCode: trimOrNull(payload.promoCode),
     whatsappMessage: String(payload.whatsappMessage || "").trim(),
     items
@@ -832,12 +847,15 @@ function mapOrderRow(row) {
     customerEmail: row.customer_email,
     firebaseUid: row.firebase_uid,
     mode: row.mode,
+    orderType: row.order_type || row.mode,
     address: row.address,
     latitude: row.latitude === null ? null : Number(row.latitude),
     longitude: row.longitude === null ? null : Number(row.longitude),
+    customerLat: row.customer_lat === null || row.customer_lat === undefined ? null : Number(row.customer_lat),
+    customerLng: row.customer_lng === null || row.customer_lng === undefined ? null : Number(row.customer_lng),
     locationAccuracy: row.location_accuracy === null ? null : Number(row.location_accuracy),
     locationTimestamp: row.location_timestamp || null,
-    distanceKm: Number(row.distance_km || 0),
+    distanceKm: row.distance_km === null || row.distance_km === undefined ? null : Number(row.distance_km),
     deliveryZoneRadius: row.delivery_zone_radius === null ? null : Number(row.delivery_zone_radius),
     acceptedAt: row.accepted_at || null,
     readyAt: row.ready_at || null,
@@ -850,6 +868,7 @@ function mapOrderRow(row) {
     whatsappMessage: row.whatsapp_message,
     status: row.status,
     customerId: row.customer_id === null ? null : Number(row.customer_id),
+    needsManualDeliveryCheck: row.needs_manual_delivery_check === true,
     estimatedTime: row.estimated_time || null
   };
 }
@@ -1542,23 +1561,29 @@ async function createOrderRecord(order) {
         WHERE status IN ('new', 'accepted', 'preparing')
       `);
       const activeOrders = Number(activeOrdersResult.rows[0]?.active_count || 0);
-      let deliveryDistanceKm = 0;
+      let deliveryDistanceKm = order.mode === "delivery" ? null : 0;
       let deliveryFee = 0;
+      let needsManualDeliveryCheck = order.needsManualDeliveryCheck === true;
 
       if (order.mode === "delivery") {
         const storeCoordinates = normalizeCoordinatePair(settings.shopLatitude, settings.shopLongitude);
-        const customerCoordinates = normalizeCoordinatePair(order.latitude, order.longitude);
-        if (!storeCoordinates.valid) {
+        const customerCoordinates = normalizeCoordinatePair(order.customerLat ?? order.latitude, order.customerLng ?? order.longitude);
+        if (!storeCoordinates.valid && !order.address) {
           const error = new Error("Position du restaurant non configurée");
           error.status = 400;
+          error.code = "STORE_LOCATION_MISSING";
           throw error;
         }
         if (!customerCoordinates.valid && !order.address) {
           const error = new Error("Position GPS ou adresse client requise");
           error.status = 400;
+          error.code = "DELIVERY_ADDRESS_REQUIRED";
           throw error;
         }
-        if (customerCoordinates.valid) {
+        if (!storeCoordinates.valid && order.address) {
+          needsManualDeliveryCheck = true;
+        }
+        if (customerCoordinates.valid && storeCoordinates.valid) {
           deliveryDistanceKm = calculateDistanceKm(
             { latitude: storeCoordinates.latitude, longitude: storeCoordinates.longitude },
             { latitude: customerCoordinates.latitude, longitude: customerCoordinates.longitude }
@@ -1571,15 +1596,22 @@ async function createOrderRecord(order) {
 
           const maxDeliveryKm = Number(settings.maxDeliveryKm);
           if (Number.isFinite(maxDeliveryKm) && maxDeliveryKm > 0 && deliveryDistanceKm > maxDeliveryKm) {
-            const error = new Error(`Adresse hors zone de livraison (${deliveryDistanceKm.toFixed(2)} km)`);
-            error.status = 400;
-            error.code = "DELIVERY_OUT_OF_ZONE";
-            error.distanceKm = deliveryDistanceKm;
-            throw error;
+            if (order.address || needsManualDeliveryCheck) {
+              deliveryDistanceKm = null;
+              needsManualDeliveryCheck = true;
+            } else {
+              const error = new Error(`Adresse hors zone de livraison (${deliveryDistanceKm.toFixed(2)} km)`);
+              error.status = 400;
+              error.code = "DELIVERY_OUT_OF_ZONE";
+              error.distanceKm = deliveryDistanceKm;
+              throw error;
+            }
           }
+        } else {
+          needsManualDeliveryCheck = true;
         }
 
-        deliveryFee = calculateDeliveryFeeMad(deliveryDistanceKm, settings);
+        deliveryFee = calculateDeliveryFeeMad(Number.isFinite(deliveryDistanceKm) ? deliveryDistanceKm : 0, settings);
         if (!Number.isFinite(deliveryFee)) {
           const error = new Error("Position du restaurant non configurée");
           error.status = 400;
@@ -1588,7 +1620,7 @@ async function createOrderRecord(order) {
         console.log(`[Order] Delivery recalculated: ${deliveryDistanceKm} km, ${deliveryFee} MAD`);
       }
 
-      const distanceMinutes = Math.max(0, Math.round(deliveryDistanceKm * 3));
+      const distanceMinutes = Math.max(0, Math.round((Number(deliveryDistanceKm) || 0) * 3));
       const queueMinutes = activeOrders * 4;
       const estimateMin = Math.max(15, Number(settings.preparationTimeBase || fallbackSettings.preparationTimeBase) + distanceMinutes + queueMinutes);
       const estimateMax = estimateMin + 10;
@@ -1612,11 +1644,11 @@ async function createOrderRecord(order) {
       const orderResult = await client.query(`
         INSERT INTO orders (
           customer_name, customer_phone, customer_email, firebase_uid,
-          mode, address, latitude, longitude, location_accuracy, location_timestamp, distance_km, delivery_zone_radius, accepted_at, ready_at,
+          mode, order_type, address, latitude, longitude, customer_lat, customer_lng, needs_manual_delivery_check, location_accuracy, location_timestamp, distance_km, delivery_zone_radius, accepted_at, ready_at,
           accepted_until, preparing_until, estimated_delivery_minutes,
           delivery_fee, subtotal, discount, total, promo_code, whatsapp_message, status, customer_id, supabase_uid
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL, $13, $14, $15, NULL, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULL, $17, $18, $19, NULL, $20, $21, $22, $23, $24, $25, $26, $27, $28)
         RETURNING *
       `, [
         order.customerName || "",
@@ -1624,9 +1656,13 @@ async function createOrderRecord(order) {
         order.customerEmail,
         order.firebaseUid,
         order.mode,
+        order.orderType || order.mode,
         order.address,
         order.latitude,
         order.longitude,
+        order.customerLat,
+        order.customerLng,
+        needsManualDeliveryCheck,
         order.locationAccuracy,
         order.locationTimestamp,
         deliveryDistanceKm,
@@ -3032,7 +3068,7 @@ app.use((error, req, res, next) => {
   res.status(error.status || 500).json({
     error: error.code || error.message || "Internal server error",
     message: error.message || "Internal server error",
-    ...(Number.isFinite(error.distanceKm) ? { distanceKm: error.distanceKm } : {})
+    ...(Number.isFinite(error.distanceKm) ? { distanceKm: error.distanceKm, distance_km: error.distanceKm } : {})
   });
 });
 
