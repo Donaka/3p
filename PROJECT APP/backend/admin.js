@@ -544,13 +544,13 @@ const admin = {
             this.setVal('setting-address', settings.shopAddress);
             this.setVal('setting-closed-message', settings.closedMessage);
             
-            this.setVal('setting-lat', settings.shopLatitude);
-            this.setVal('setting-lng', settings.shopLongitude);
+            this.setVal('setting-lat', settings.store_lat ?? settings.shopLatitude ?? '');
+            this.setVal('setting-lng', settings.store_lng ?? settings.shopLongitude ?? '');
             
-            this.setVal('setting-min-delivery-price', settings.minimumDeliveryPrice ?? 10);
+            this.setVal('setting-min-delivery-price', settings.delivery_min_fee ?? settings.minimumDeliveryPrice ?? 10);
             this.setVal('setting-base-distance', settings.baseDeliveryDistanceKm ?? 1);
-            this.setVal('setting-extra-km-price', settings.extraKmPrice ?? 5);
-            this.setVal('setting-max-distance', settings.maxDeliveryKm);
+            this.setVal('setting-extra-km-price', settings.delivery_fee_per_km ?? settings.deliveryFeePerKm ?? settings.extraKmPrice ?? 5);
+            this.setVal('setting-max-distance', settings.delivery_max_distance_km ?? settings.maxDeliveryKm);
 
             // Auto Hours
             this.setCheck('setting-auto-schedule', settings.autoScheduleEnabled);
@@ -561,7 +561,7 @@ const admin = {
             this.updateComputedStatusPreview(settings);
 
             if (document.getElementById('shop-map')) {
-                this.initMap(settings.shopLatitude, settings.shopLongitude);
+                this.initMap(settings.store_lat ?? settings.shopLatitude, settings.store_lng ?? settings.shopLongitude);
             }
             this.renderHeroImagesList(settings.heroImages || []);
             
@@ -573,6 +573,8 @@ const admin = {
     },
 
     initMap(lat, lng) {
+        lat = Number.isFinite(Number(lat)) ? Number(lat) : 30.4219;
+        lng = Number.isFinite(Number(lng)) ? Number(lng) : -9.5981;
         if (this.map) {
             this.map.setView([lat, lng], 13);
             if (this.shopMarker) this.shopMarker.setLatLng([lat, lng]);
@@ -635,7 +637,7 @@ const admin = {
     },
 
     updateDeliveryPreview() {
-        const minPrice = parseFloat(document.getElementById('setting-min-delivery-price').value) || 0;
+        const minPrice = Math.max(10, Math.round(parseFloat(document.getElementById('setting-min-delivery-price').value) || 0));
         const baseDist = parseFloat(document.getElementById('setting-base-distance').value) || 0;
         const extraPrice = parseFloat(document.getElementById('setting-extra-km-price').value) || 0;
         
@@ -646,7 +648,7 @@ const admin = {
         testDistances.forEach(d => {
             let price = minPrice;
             if (d > baseDist) {
-                price = minPrice + Math.ceil(d - baseDist) * extraPrice;
+                price = Math.max(minPrice, Math.round(minPrice + Math.ceil(d - baseDist) * extraPrice));
             }
             
             const tr = document.createElement('tr');
@@ -674,10 +676,16 @@ const admin = {
             closedMessage: getVal('setting-closed-message'),
             shopLatitude: parseFloat(getVal('setting-lat')),
             shopLongitude: parseFloat(getVal('setting-lng')),
-            minimumDeliveryPrice: parseFloat(getVal('setting-min-delivery-price')),
+            store_lat: parseFloat(getVal('setting-lat')),
+            store_lng: parseFloat(getVal('setting-lng')),
+            minimumDeliveryPrice: Math.max(10, Math.round(parseFloat(getVal('setting-min-delivery-price')) || 0)),
+            delivery_min_fee: Math.max(10, Math.round(parseFloat(getVal('setting-min-delivery-price')) || 0)),
             baseDeliveryDistanceKm: parseFloat(getVal('setting-base-distance')),
             extraKmPrice: parseFloat(getVal('setting-extra-km-price')),
+            deliveryFeePerKm: parseFloat(getVal('setting-extra-km-price')),
+            delivery_fee_per_km: parseFloat(getVal('setting-extra-km-price')),
             maxDeliveryKm: parseFloat(getVal('setting-max-distance')),
+            delivery_max_distance_km: parseFloat(getVal('setting-max-distance')),
             autoScheduleEnabled: getChecked('setting-auto-schedule'),
             openingTime: getVal('setting-opening-time'),
             closingTime: getVal('setting-closing-time'),

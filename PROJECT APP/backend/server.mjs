@@ -133,8 +133,8 @@ let dbInitError = hasDatabase ? null : new Error("DATABASE_URL is missing. Postg
 const fallbackSettings = {
   storeName: "3P CHICKEN POPS",
   heroImages: [],
-  shopLatitude: 30.4017949,
-  shopLongitude: -9.5510469,
+  shopLatitude: null,
+  shopLongitude: null,
   shopAddress: "3P Chicken Pops, Agadir, Maroc",
   shopPhone: "212688943959",
   shopWhatsAppNumber: "212688943959",
@@ -154,6 +154,14 @@ const fallbackSettings = {
   closingTime: "03:00",
   timezone: "Africa/Casablanca",
   closedMessage: "Nous sommes fermes actuellement. Merci de revenir pendant nos horaires d'ouverture."
+};
+
+const MIN_DELIVERY_FEE_MAD = 10;
+const AGADIR_COORDINATE_BOUNDS = {
+  minLat: 29,
+  maxLat: 31.2,
+  minLng: -10.8,
+  maxLng: -8
 };
 
 async function ensureDatabase() {
@@ -256,13 +264,18 @@ async function ensureDatabase() {
             store_name TEXT NOT NULL DEFAULT '3P CHICKEN POPS',
             shop_address TEXT NOT NULL DEFAULT '',
             shop_phone TEXT NOT NULL DEFAULT '',
-            shop_latitude DOUBLE PRECISION NOT NULL DEFAULT 30.4017949,
-            shop_longitude DOUBLE PRECISION NOT NULL DEFAULT -9.5510469,
+            shop_latitude DOUBLE PRECISION,
+            shop_longitude DOUBLE PRECISION,
+            store_lat DOUBLE PRECISION,
+            store_lng DOUBLE PRECISION,
             shop_whatsapp_number TEXT NOT NULL DEFAULT '212688943959',
             minimum_delivery_price NUMERIC(10, 2) NOT NULL DEFAULT 10,
+            delivery_min_fee NUMERIC(10, 2) NOT NULL DEFAULT 10,
             base_delivery_distance_km NUMERIC(10, 2) NOT NULL DEFAULT 1,
             extra_km_price NUMERIC(10, 2) NOT NULL DEFAULT 5,
+            delivery_fee_per_km NUMERIC(10, 2) NOT NULL DEFAULT 5,
             max_delivery_km NUMERIC(10, 2),
+            delivery_max_distance_km NUMERIC(10, 2),
             minimum_order_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,
             preparation_time_base INTEGER NOT NULL DEFAULT 20,
             default_delivery_countdown_minutes INTEGER NOT NULL DEFAULT 30,
@@ -281,10 +294,19 @@ async function ensureDatabase() {
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS store_name TEXT NOT NULL DEFAULT '3P CHICKEN POPS';`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS shop_address TEXT NOT NULL DEFAULT '';`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS shop_phone TEXT NOT NULL DEFAULT '';`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS shop_latitude DOUBLE PRECISION;`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS shop_longitude DOUBLE PRECISION;`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS store_lat DOUBLE PRECISION;`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS store_lng DOUBLE PRECISION;`);
+        await client.query(`ALTER TABLE settings ALTER COLUMN shop_latitude DROP NOT NULL;`);
+        await client.query(`ALTER TABLE settings ALTER COLUMN shop_longitude DROP NOT NULL;`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS minimum_delivery_price NUMERIC(10, 2) NOT NULL DEFAULT 10;`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS delivery_min_fee NUMERIC(10, 2) NOT NULL DEFAULT 10;`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS base_delivery_distance_km NUMERIC(10, 2) NOT NULL DEFAULT 1;`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS extra_km_price NUMERIC(10, 2) NOT NULL DEFAULT 5;`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS delivery_fee_per_km NUMERIC(10, 2) NOT NULL DEFAULT 5;`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS max_delivery_km NUMERIC(10, 2);`);
+        await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS delivery_max_distance_km NUMERIC(10, 2);`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS shop_whatsapp_number TEXT NOT NULL DEFAULT '212688943959';`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS minimum_order_amount NUMERIC(10, 2) NOT NULL DEFAULT 0;`);
         await client.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS preparation_time_base INTEGER NOT NULL DEFAULT 20;`);
@@ -504,6 +526,59 @@ function parseOptionalNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function parseSettingsNumber(settings, primaryKey, fallback = null, ...aliases) {
+  for (const key of [primaryKey, ...aliases]) {
+    if (settings[key] !== undefined && settings[key] !== null && settings[key] !== "") {
+      const number = Number(settings[key]);
+      return Number.isFinite(number) ? number : fallback;
+    }
+  }
+  return fallback;
+}
+
+function isAgadirCoordinate(lat, lng) {
+  return Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat >= AGADIR_COORDINATE_BOUNDS.minLat &&
+    lat <= AGADIR_COORDINATE_BOUNDS.maxLat &&
+    lng >= AGADIR_COORDINATE_BOUNDS.minLng &&
+    lng <= AGADIR_COORDINATE_BOUNDS.maxLng;
+}
+
+function normalizeCoordinatePair(lat, lng) {
+  const latitude = Number(lat);
+  const longitude = Number(lng);
+  if (!latitude || !longitude) return { latitude: null, longitude: null, valid: false };
+  if (!isAgadirCoordinate(latitude, longitude)) return { latitude: null, longitude: null, valid: false };
+  return { latitude, longitude, valid: true };
+}
+
+function calculateDistanceKm(from, to) {
+  const start = normalizeCoordinatePair(from?.latitude, from?.longitude);
+  const end = normalizeCoordinatePair(to?.latitude, to?.longitude);
+  if (!start.valid || !end.valid) return null;
+
+  const earthRadiusKm = 6371;
+  const toRadians = degrees => degrees * (Math.PI / 180);
+  const latDelta = toRadians(end.latitude - start.latitude);
+  const lonDelta = toRadians(end.longitude - start.longitude);
+  const startLat = toRadians(start.latitude);
+  const endLat = toRadians(end.latitude);
+  const haversine = Math.sin(latDelta / 2) ** 2
+    + Math.cos(startLat) * Math.cos(endLat) * Math.sin(lonDelta / 2) ** 2;
+  const distance = earthRadiusKm * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+  return Math.round(distance * 100) / 100;
+}
+
+function calculateDeliveryFeeMad(distanceKm, settings) {
+  if (!Number.isFinite(distanceKm) || distanceKm < 0) return null;
+  const minFee = Math.max(MIN_DELIVERY_FEE_MAD, Math.round(Number(settings.minimumDeliveryPrice) || 0));
+  const baseDistance = Math.max(0, Number(settings.baseDeliveryDistanceKm) || 0);
+  const perKm = Math.max(0, Number(settings.deliveryFeePerKm ?? settings.extraKmPrice ?? settings.deliveryPricePerKm) || 0);
+  const extraDistance = Math.max(0, distanceKm - baseDistance);
+  return Math.max(minFee, Math.round(minFee + Math.ceil(extraDistance) * perKm));
+}
+
 function trimOrNull(value) {
   const trimmed = String(value ?? "").trim();
   return trimmed || null;
@@ -627,6 +702,16 @@ const authenticateToken = (req, res, next) => {
 };
 
 function normalizeSettings(settings = {}) {
+  const shopCoordinates = normalizeCoordinatePair(
+    parseSettingsNumber(settings, "shopLatitude", fallbackSettings.shopLatitude, "store_lat", "storeLat"),
+    parseSettingsNumber(settings, "shopLongitude", fallbackSettings.shopLongitude, "store_lng", "storeLng")
+  );
+  const deliveryFeePerKm = Math.max(0, parseSettingsNumber(settings, "deliveryFeePerKm", fallbackSettings.extraKmPrice, "delivery_fee_per_km", "extraKmPrice", "deliveryPricePerKm") || 0);
+  const minimumDeliveryPrice = Math.max(
+    MIN_DELIVERY_FEE_MAD,
+    parseSettingsNumber(settings, "minimumDeliveryPrice", fallbackSettings.minimumDeliveryPrice, "delivery_min_fee") || 0
+  );
+  const maxDeliveryKm = parseSettingsNumber(settings, "maxDeliveryKm", fallbackSettings.maxDeliveryKm, "delivery_max_distance_km");
   return {
     storeName: String(settings.storeName || fallbackSettings.storeName).trim(),
     shopAddress: String(settings.shopAddress || "").trim(),
@@ -646,14 +731,20 @@ function normalizeSettings(settings = {}) {
       })
       .filter(item => item.imageUrl)
       .slice(0, 10),
-    shopLatitude: Number(settings.shopLatitude) || fallbackSettings.shopLatitude,
-    shopLongitude: Number(settings.shopLongitude) || fallbackSettings.shopLongitude,
+    shopLatitude: shopCoordinates.latitude,
+    shopLongitude: shopCoordinates.longitude,
+    store_lat: shopCoordinates.latitude,
+    store_lng: shopCoordinates.longitude,
     shopWhatsAppNumber: String(settings.shopWhatsAppNumber || fallbackSettings.shopWhatsAppNumber).replace(/[^\d]/g, "").trim() || fallbackSettings.shopWhatsAppNumber,
-    deliveryPricePerKm: Math.max(0, Number(settings.deliveryPricePerKm || fallbackSettings.deliveryPricePerKm)),
-    minimumDeliveryPrice: Math.max(0, (settings.minimumDeliveryPrice === undefined || settings.minimumDeliveryPrice === null || settings.minimumDeliveryPrice === "") ? fallbackSettings.minimumDeliveryPrice : Number(settings.minimumDeliveryPrice)),
+    deliveryPricePerKm: deliveryFeePerKm,
+    deliveryFeePerKm,
+    delivery_fee_per_km: deliveryFeePerKm,
+    minimumDeliveryPrice,
+    delivery_min_fee: minimumDeliveryPrice,
     baseDeliveryDistanceKm: Math.max(0, (settings.baseDeliveryDistanceKm === undefined || settings.baseDeliveryDistanceKm === null || settings.baseDeliveryDistanceKm === "") ? fallbackSettings.baseDeliveryDistanceKm : Number(settings.baseDeliveryDistanceKm)),
-    extraKmPrice: Math.max(0, (settings.extraKmPrice === undefined || settings.extraKmPrice === null || settings.extraKmPrice === "") ? fallbackSettings.extraKmPrice : Number(settings.extraKmPrice)),
-    maxDeliveryKm: parseOptionalNumber(settings.maxDeliveryKm),
+    extraKmPrice: deliveryFeePerKm,
+    maxDeliveryKm,
+    delivery_max_distance_km: maxDeliveryKm,
     minimumOrderAmount: Math.max(0, Number(settings.minimumOrderAmount || fallbackSettings.minimumOrderAmount)),
     preparationTimeBase: Math.max(5, Math.round(Number(settings.preparationTimeBase) || fallbackSettings.preparationTimeBase)),
     defaultDeliveryCountdownMinutes: Math.max(5, Math.round(Number(settings.defaultDeliveryCountdownMinutes) || fallbackSettings.defaultDeliveryCountdownMinutes)),
@@ -1008,13 +1099,14 @@ function mapSettingsRow(row) {
     shopAddress: row?.shop_address,
     shopPhone: row?.shop_phone,
     heroImages: Array.isArray(row?.hero_images_json) ? row.hero_images_json : [],
-    shopLatitude: row?.shop_latitude,
-    shopLongitude: row?.shop_longitude,
+    shopLatitude: row?.store_lat ?? row?.shop_latitude,
+    shopLongitude: row?.store_lng ?? row?.shop_longitude,
     shopWhatsAppNumber: row?.shop_whatsapp_number,
-    minimumDeliveryPrice: row?.minimum_delivery_price,
+    minimumDeliveryPrice: row?.delivery_min_fee ?? row?.minimum_delivery_price,
     baseDeliveryDistanceKm: row?.base_delivery_distance_km,
-    extraKmPrice: row?.extra_km_price,
-    maxDeliveryKm: row?.max_delivery_km,
+    extraKmPrice: row?.delivery_fee_per_km ?? row?.extra_km_price,
+    deliveryFeePerKm: row?.delivery_fee_per_km ?? row?.extra_km_price,
+    maxDeliveryKm: row?.delivery_max_distance_km ?? row?.max_delivery_km,
     minimumOrderAmount: row?.minimum_order_amount,
     preparationTimeBase: row?.preparation_time_base,
     defaultDeliveryCountdownMinutes: row?.default_delivery_countdown_minutes,
@@ -1074,24 +1166,29 @@ async function updateSettingsInDb(settings) {
     const normalized = normalizeSettings(settings);
         const result = await dbPool.query(`
           INSERT INTO settings (
-            id, store_name, shop_address, shop_phone, shop_latitude, shop_longitude, shop_whatsapp_number,
-            minimum_delivery_price, base_delivery_distance_km, extra_km_price, max_delivery_km,
+            id, store_name, shop_address, shop_phone, shop_latitude, shop_longitude, store_lat, store_lng, shop_whatsapp_number,
+            minimum_delivery_price, delivery_min_fee, base_delivery_distance_km, extra_km_price, delivery_fee_per_km, max_delivery_km, delivery_max_distance_km,
             minimum_order_amount, preparation_time_base, default_delivery_countdown_minutes,
             delivery_zones_json, promo_codes_json, hero_images_json, is_store_open, 
             auto_schedule_enabled, opening_time, closing_time, timezone, closed_message, updated_at
           )
-          VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18, $19, $20, $21, $22, NOW())
+          VALUES (1, $1, $2, $3, $4, $5, $4, $5, $6, $7, $7, $8, $9, $9, $10, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18, $19, $20, $21, $22, NOW())
           ON CONFLICT (id) DO UPDATE SET
             store_name = EXCLUDED.store_name,
             shop_address = EXCLUDED.shop_address,
             shop_phone = EXCLUDED.shop_phone,
             shop_latitude = EXCLUDED.shop_latitude,
             shop_longitude = EXCLUDED.shop_longitude,
+            store_lat = EXCLUDED.store_lat,
+            store_lng = EXCLUDED.store_lng,
             shop_whatsapp_number = EXCLUDED.shop_whatsapp_number,
             minimum_delivery_price = EXCLUDED.minimum_delivery_price,
+            delivery_min_fee = EXCLUDED.delivery_min_fee,
             base_delivery_distance_km = EXCLUDED.base_delivery_distance_km,
             extra_km_price = EXCLUDED.extra_km_price,
+            delivery_fee_per_km = EXCLUDED.delivery_fee_per_km,
             max_delivery_km = EXCLUDED.max_delivery_km,
+            delivery_max_distance_km = EXCLUDED.delivery_max_distance_km,
             minimum_order_amount = EXCLUDED.minimum_order_amount,
             preparation_time_base = EXCLUDED.preparation_time_base,
             default_delivery_countdown_minutes = EXCLUDED.default_delivery_countdown_minutes,
@@ -1446,7 +1543,55 @@ async function createOrderRecord(order) {
         WHERE status IN ('new', 'accepted', 'preparing')
       `);
       const activeOrders = Number(activeOrdersResult.rows[0]?.active_count || 0);
-      const distanceMinutes = Math.max(0, Math.round((Number(order.distanceKm || 0)) * 3));
+      let deliveryDistanceKm = 0;
+      let deliveryFee = 0;
+
+      if (order.mode === "delivery") {
+        const storeCoordinates = normalizeCoordinatePair(settings.shopLatitude, settings.shopLongitude);
+        const customerCoordinates = normalizeCoordinatePair(order.latitude, order.longitude);
+        if (!storeCoordinates.valid) {
+          const error = new Error("Position du restaurant non configurée");
+          error.status = 400;
+          throw error;
+        }
+        if (!customerCoordinates.valid && !order.address) {
+          const error = new Error("Position GPS ou adresse client requise");
+          error.status = 400;
+          throw error;
+        }
+        if (!customerCoordinates.valid) {
+          const error = new Error("Position GPS client invalide");
+          error.status = 400;
+          throw error;
+        }
+
+        deliveryDistanceKm = calculateDistanceKm(
+          { latitude: storeCoordinates.latitude, longitude: storeCoordinates.longitude },
+          { latitude: customerCoordinates.latitude, longitude: customerCoordinates.longitude }
+        );
+        if (!Number.isFinite(deliveryDistanceKm)) {
+          const error = new Error("Position du restaurant non configurée");
+          error.status = 400;
+          throw error;
+        }
+
+        const maxDeliveryKm = Number(settings.maxDeliveryKm);
+        if (Number.isFinite(maxDeliveryKm) && maxDeliveryKm > 0 && deliveryDistanceKm > maxDeliveryKm) {
+          const error = new Error(`Adresse hors zone de livraison (${deliveryDistanceKm.toFixed(2)} km)`);
+          error.status = 400;
+          throw error;
+        }
+
+        deliveryFee = calculateDeliveryFeeMad(deliveryDistanceKm, settings);
+        if (!Number.isFinite(deliveryFee)) {
+          const error = new Error("Position du restaurant non configurée");
+          error.status = 400;
+          throw error;
+        }
+        console.log(`[Order] Delivery recalculated: ${deliveryDistanceKm} km, ${deliveryFee} MAD`);
+      }
+
+      const distanceMinutes = Math.max(0, Math.round(deliveryDistanceKm * 3));
       const queueMinutes = activeOrders * 4;
       const estimateMin = Math.max(15, Number(settings.preparationTimeBase || fallbackSettings.preparationTimeBase) + distanceMinutes + queueMinutes);
       const estimateMax = estimateMin + 10;
@@ -1462,25 +1607,6 @@ async function createOrderRecord(order) {
         : null;
       const initialStatus = order.mode === "pickup" ? "accepted" : "new";
 
-      // Re-calculate delivery fee on backend for security
-      let deliveryFee = 0;
-      if (order.mode === "delivery") {
-        const minPrice = Number(settings.minimumDeliveryPrice) || 10;
-        const baseDist = Number(settings.baseDeliveryDistanceKm) || 0;
-        const extraPrice = Number(settings.extraKmPrice) || 0;
-        
-        deliveryFee = minPrice;
-        if (order.distanceKm > baseDist) {
-          const extraKm = Math.ceil(order.distanceKm - baseDist);
-          deliveryFee += extraKm * extraPrice;
-        }
-        
-        if (deliveryFee <= 0 && minPrice > 0) {
-          deliveryFee = minPrice;
-        }
-        console.log(`[Order] Delivery Fee Verified: ${deliveryFee} MAD (Min: ${minPrice}, Dist: ${order.distanceKm}km)`);
-      }
-      
       const subtotal = order.items.reduce((sum, i) => sum + i.lineTotal, 0);
       const total = Math.max(0, subtotal + deliveryFee - (order.discount || 0));
 
@@ -1506,7 +1632,7 @@ async function createOrderRecord(order) {
         order.longitude,
         order.locationAccuracy,
         order.locationTimestamp,
-        order.distanceKm,
+        deliveryDistanceKm,
         order.deliveryZoneRadius,
         pickupReadyAt,
         acceptedUntil,
@@ -2907,7 +3033,8 @@ app.use((error, req, res, next) => {
   console.error("[API Error]", error);
   if (res.headersSent) return next(error);
   res.status(error.status || 500).json({
-    error: error.message || "Internal server error"
+    error: error.message || "Internal server error",
+    message: error.message || "Internal server error"
   });
 });
 

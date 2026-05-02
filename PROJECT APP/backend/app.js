@@ -15,10 +15,10 @@ const FCM_VAPID_KEY = "Z02lSpdHObXSkAYQOqbEVPF3qO40B7PkzieHdNsYG9k";
 const shopWhatsAppNumber = "212688943959";
 
 const defaultShopSettings = {
-  shopLatitude: 30.4017949,
-  shopLongitude: -9.5510469,
+  shopLatitude: null,
+  shopLongitude: null,
   deliveryPricePerKm: 5,
-  minimumDeliveryPrice: 0,
+  minimumDeliveryPrice: 10,
   deliveryZones: [],
   promoCodes: [],
   shopWhatsAppNumber,
@@ -27,6 +27,36 @@ const defaultShopSettings = {
   isStoreOpen: true,
   closedMessage: "Nous sommes fermes actuellement. Merci de revenir pendant nos horaires d'ouverture."
 };
+
+const MIN_DELIVERY_FEE_MAD = 10;
+const AGADIR_COORDINATE_BOUNDS = { minLat: 29, maxLat: 31.2, minLng: -10.8, maxLng: -8 };
+
+function isValidAgadirCoordinate(lat, lng) {
+  const latitude = Number(lat);
+  const longitude = Number(lng);
+  return Number.isFinite(latitude)
+    && Number.isFinite(longitude)
+    && latitude !== 0
+    && longitude !== 0
+    && latitude >= AGADIR_COORDINATE_BOUNDS.minLat
+    && latitude <= AGADIR_COORDINATE_BOUNDS.maxLat
+    && longitude >= AGADIR_COORDINATE_BOUNDS.minLng
+    && longitude <= AGADIR_COORDINATE_BOUNDS.maxLng;
+}
+
+function getStoreLocation() {
+  const latitude = Number(state.settings.store_lat ?? state.settings.shopLatitude);
+  const longitude = Number(state.settings.store_lng ?? state.settings.shopLongitude);
+  return isValidAgadirCoordinate(latitude, longitude) ? { latitude, longitude } : null;
+}
+
+function calculateDeliveryFee(distanceKm) {
+  if (!Number.isFinite(Number(distanceKm)) || Number(distanceKm) < 0) return null;
+  const minFee = Math.max(MIN_DELIVERY_FEE_MAD, Math.round(Number(state.settings.delivery_min_fee ?? state.settings.minimumDeliveryPrice) || 0));
+  const baseDistance = Math.max(0, Number(state.settings.baseDeliveryDistanceKm) || 0);
+  const perKm = Math.max(0, Number(state.settings.delivery_fee_per_km ?? state.settings.deliveryFeePerKm ?? state.settings.extraKmPrice ?? state.settings.deliveryPricePerKm) || 0);
+  return Math.max(minFee, Math.round(minFee + Math.ceil(Math.max(0, distanceKm - baseDistance)) * perKm));
+}
 
 let categories = [
   {
@@ -437,7 +467,7 @@ let lastOtpPhone = "";
 let resendCooldown = 0;
 let resendTimer = null;
 
-const money = value => `${Number.isInteger(value) ? value : value.toFixed(2)} DHS`;
+const money = value => `${Math.round(Number(value) || 0)} MAD`;
 
 function toRadians(value) {
   return value * Math.PI / 180;
@@ -2380,18 +2410,16 @@ function getCartDetails() {
     };
   }).filter(item => item.name);
   const subtotal = items.reduce((sum, item) => sum + item.lineTotal, 0);
-  const shopLocation = {
-    latitude: Number(state.settings.shopLatitude) || defaultShopSettings.shopLatitude,
-    longitude: Number(state.settings.shopLongitude) || defaultShopSettings.shopLongitude
-  };
-  const distanceKm = state.mode === "delivery" && state.location
+  const shopLocation = getStoreLocation();
+  const hasValidLocation = state.location && isValidAgadirCoordinate(state.location.latitude, state.location.longitude);
+  const distanceKm = state.mode === "delivery" && shopLocation && hasValidLocation
     ? getDistanceKm(shopLocation, state.location)
     : 0;
   const matchedZone = state.mode === "delivery" && distanceKm > 0
     ? getMatchingDeliveryZone(distanceKm)
     : null;
   const fee = state.mode === "delivery" && subtotal > 0
-    ? Number(matchedZone?.price || 0)
+    ? (Number(matchedZone?.price) || calculateDeliveryFee(distanceKm) || 0)
     : 0;
   const beforeDiscount = subtotal + fee;
   const promoDiscount = calculatePromoDiscount(state.promo, beforeDiscount);
@@ -2417,7 +2445,7 @@ function renderCart() {
   cartTotal.textContent = money(total);
   cartTitle.textContent = `${count} ${count === 1 ? t("item") : t("items")}`;
   subtotalNode.textContent = money(subtotal);
-  serviceFeeNode.textContent = state.mode === "delivery" && count > 0 && !matchedZone && distanceKm > 0 ? "--" : money(fee);
+  serviceFeeNode.textContent = state.mode === "delivery" && count > 0 && distanceKm > 0 && fee <= 0 ? "--" : money(fee);
   serviceLabel.textContent = state.mode === "delivery" && distanceKm > 0
     ? `${t("delivery")} ${distanceKm.toFixed(1)} km`
     : state.mode === "delivery" ? `${t("delivery")} Â· ${t("deliveryZone")}` : t("pickup");
@@ -2662,10 +2690,14 @@ function applyCapturedLocation(position) {
   };
   const mapLink = getMapLink(state.location);
   fillAddressFromLocation(state.location);
-  if (!getMatchingDeliveryZone(getDistanceKm({
-    latitude: Number(state.settings.shopLatitude) || defaultShopSettings.shopLatitude,
-    longitude: Number(state.settings.shopLongitude) || defaultShopSettings.shopLongitude
-  }, state.location))) {
+  const shopLocation = getStoreLocation();
+  if (!shopLocation) {
+    setLocationStatus("Position du restaurant non configurée");
+    showToast("Position du restaurant non configurée");
+  } else if (!isValidAgadirCoordinate(state.location.latitude, state.location.longitude)) {
+    setLocationStatus("Position GPS invalide");
+    showToast("Position GPS invalide");
+  } else if (!getMatchingDeliveryZone(getDistanceKm(shopLocation, state.location)) && Number(state.settings.maxDeliveryKm) > 0 && getDistanceKm(shopLocation, state.location) > Number(state.settings.maxDeliveryKm)) {
     setLocationStatus(`${t("outsideAgadir")} ${mapLink}`);
     showToast(t("outsideAgadir"));
   } else {
@@ -2721,10 +2753,11 @@ async function captureLocation() {
 
 function canDeliverToCurrentLocation(showMessage = false) {
   if (state.mode !== "delivery") return true;
-  if (!getSortedDeliveryZones().length) {
+  const shopLocation = getStoreLocation();
+  if (!shopLocation) {
     if (showMessage) {
-      setLocationStatus(t("noDeliveryZones"));
-      showToast(t("noDeliveryZones"));
+      setLocationStatus("Position du restaurant non configurée");
+      showToast("Position du restaurant non configurée");
     }
     return false;
   }
@@ -2735,11 +2768,15 @@ function canDeliverToCurrentLocation(showMessage = false) {
     }
     return false;
   }
-  const shopLocation = {
-    latitude: Number(state.settings.shopLatitude) || defaultShopSettings.shopLatitude,
-    longitude: Number(state.settings.shopLongitude) || defaultShopSettings.shopLongitude
-  };
-  if (!getMatchingDeliveryZone(getDistanceKm(shopLocation, state.location))) {
+  if (!isValidAgadirCoordinate(state.location.latitude, state.location.longitude)) {
+    if (showMessage) {
+      setLocationStatus("Position GPS invalide");
+      showToast("Position GPS invalide");
+    }
+    return false;
+  }
+  const distanceKm = getDistanceKm(shopLocation, state.location);
+  if (Number(state.settings.maxDeliveryKm) > 0 && distanceKm > Number(state.settings.maxDeliveryKm)) {
     if (showMessage) {
       setLocationStatus(t("outsideAgadir"));
       showToast(t("outsideAgadir"));
@@ -2818,12 +2855,13 @@ async function saveOrderBeforeWhatsapp(formData, cartSummary) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
+    console.error("Order save failed", { status: response.status, payload });
     if (payload.error === "STORE_CLOSED") {
       const error = new Error("STORE_CLOSED");
       error.closedMessage = payload.message || getClosedStoreMessage();
       throw error;
     }
-    throw new Error(payload.error || "Order could not be saved. Please try again.");
+    throw new Error(payload.message || payload.error || "Order could not be saved. Please try again.");
   }
   return payload;
 }
@@ -3202,6 +3240,10 @@ checkoutForm.addEventListener("submit", async event => {
     showToast(t("openingWhatsapp"));
   } catch (error) {
     console.error(error);
+    if (error?.message && error.message !== "STORE_CLOSED") {
+      showToast(error.message);
+      return;
+    }
     const message = error?.message === "STORE_CLOSED"
       ? (error.closedMessage || getClosedStoreMessage())
       : "Impossible dâ€™enregistrer la commande. Veuillez rÃ©essayer.";
