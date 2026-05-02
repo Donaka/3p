@@ -142,7 +142,7 @@ const fallbackSettings = {
   minimumDeliveryPrice: 10,
   baseDeliveryDistanceKm: 1,
   extraKmPrice: 5,
-  maxDeliveryKm: 20,
+  maxDeliveryKm: 5,
   minimumOrderAmount: 0,
   preparationTimeBase: 20,
   defaultDeliveryCountdownMinutes: 30,
@@ -566,9 +566,13 @@ function calculateDistanceKm(from, to) {
 
 function calculateDeliveryFeeMad(distanceKm, settings) {
   if (!Number.isFinite(distanceKm) || distanceKm < 0) return null;
-  const minFee = Math.max(MIN_DELIVERY_FEE_MAD, Math.round(Number(settings.minimumDeliveryPrice) || 0));
-  const baseDistance = Math.max(0, Number(settings.baseDeliveryDistanceKm) || 0);
-  const perKm = Math.max(0, Number(settings.deliveryFeePerKm ?? settings.extraKmPrice ?? settings.deliveryPricePerKm) || 0);
+  const minFee = Math.round(
+    parseOptionalNumber(settings.minimumDeliveryPrice) ??
+    parseOptionalNumber(settings.delivery_min_fee) ??
+    MIN_DELIVERY_FEE_MAD
+  );
+  const baseDistance = Math.max(0, parseOptionalNumber(settings.baseDeliveryDistanceKm) ?? 1);
+  const perKm = Math.max(0, parseOptionalNumber(settings.deliveryPricePerKm) ?? parseOptionalNumber(settings.delivery_fee_per_km) ?? parseOptionalNumber(settings.deliveryFeePerKm) ?? 5);
   const extraDistance = Math.max(0, distanceKm - baseDistance);
   return Math.max(minFee, Math.round(minFee + Math.ceil(extraDistance) * perKm));
 }
@@ -1596,16 +1600,11 @@ async function createOrderRecord(order) {
 
           const maxDeliveryKm = Number(settings.maxDeliveryKm);
           if (Number.isFinite(maxDeliveryKm) && maxDeliveryKm > 0 && deliveryDistanceKm > maxDeliveryKm) {
-            if (order.address || needsManualDeliveryCheck) {
-              deliveryDistanceKm = null;
-              needsManualDeliveryCheck = true;
-            } else {
-              const error = new Error(`Adresse hors zone de livraison (${deliveryDistanceKm.toFixed(2)} km)`);
-              error.status = 400;
-              error.code = "DELIVERY_OUT_OF_ZONE";
-              error.distanceKm = deliveryDistanceKm;
-              throw error;
-            }
+            const error = new Error(`Adresse hors zone de livraison (${deliveryDistanceKm.toFixed(2)} km)`);
+            error.status = 400;
+            error.code = "DELIVERY_OUT_OF_ZONE";
+            error.distanceKm = deliveryDistanceKm;
+            throw error;
           }
         } else {
           needsManualDeliveryCheck = true;
@@ -1617,7 +1616,7 @@ async function createOrderRecord(order) {
           error.status = 400;
           throw error;
         }
-        console.log(`[Order] Delivery recalculated: ${deliveryDistanceKm} km, ${deliveryFee} MAD`);
+        console.log("DELIVERY CALC", { distance_km: deliveryDistanceKm, delivery_fee: deliveryFee });
       }
 
       const distanceMinutes = Math.max(0, Math.round((Number(deliveryDistanceKm) || 0) * 3));
@@ -1713,7 +1712,17 @@ async function createOrderRecord(order) {
       await client.query("COMMIT");
       const finalOrder = applyOrderTracking(savedOrder, activeOrders, settings.preparationTimeBase);
       console.log("Created order:", finalOrder.id, "for", finalOrder.customer_phone);
-      return { ok: true, order: finalOrder, customer: mapCustomerRow(customer) };
+      return {
+        ok: true,
+        order: {
+          ...finalOrder,
+          order_type: finalOrder.orderType || finalOrder.mode,
+          delivery_fee: finalOrder.deliveryFee,
+          distance_km: finalOrder.distanceKm,
+          needs_manual_delivery_check: finalOrder.needsManualDeliveryCheck
+        },
+        customer: mapCustomerRow(customer)
+      };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -2801,7 +2810,9 @@ app.get("/api/notifications", asyncHandler(async (req, res) => {
 }));
 
 app.post("/api/orders", authenticateToken, asyncHandler(async (req, res) => {
+  console.log("ORDER RECEIVED", req.body);
   const settings = await loadSettingsSafe();
+  console.log("DELIVERY SETTINGS", settings);
   if (!settings.isStoreOpen) {
     return res.status(409).json({
       error: "STORE_CLOSED",
