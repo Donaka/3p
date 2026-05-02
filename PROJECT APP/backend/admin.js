@@ -654,23 +654,33 @@ const admin = {
         });
     },
     async saveSettings() {
+        const getVal = (id, fallback = "") => {
+            const el = document.getElementById(id);
+            return el ? el.value : fallback;
+        };
+
+        const getChecked = (id, fallback = false) => {
+            const el = document.getElementById(id);
+            return el ? Boolean(el.checked) : fallback;
+        };
+
           const settings = {
-            storeName: this.getVal('setting-store-name'),
-            isStoreOpen: document.getElementById('setting-is-open').checked,
-            shopPhone: this.getVal('setting-phone'),
-            shopWhatsAppNumber: this.getVal('setting-whatsapp'),
-            shopAddress: this.getVal('setting-address'),
-            closedMessage: this.getVal('setting-closed-message'),
-            shopLatitude: parseFloat(this.getVal('setting-lat')),
-            shopLongitude: parseFloat(this.getVal('setting-lng')),
-            minimumDeliveryPrice: parseFloat(this.getVal('setting-min-delivery-price')),
-            baseDeliveryDistanceKm: parseFloat(this.getVal('setting-base-distance')),
-            extraKmPrice: parseFloat(this.getVal('setting-extra-km-price')),
-            maxDeliveryKm: parseFloat(this.getVal('setting-max-distance')),
-            autoScheduleEnabled: document.getElementById('setting-auto-schedule').checked,
-            openingTime: this.getVal('setting-opening-time'),
-            closingTime: this.getVal('setting-closing-time'),
-            timezone: this.getVal('setting-timezone'),
+            storeName: getVal('setting-store-name'),
+            isStoreOpen: getChecked('setting-is-open'),
+            shopPhone: getVal('setting-phone'),
+            shopWhatsAppNumber: getVal('setting-whatsapp'),
+            shopAddress: getVal('setting-address'),
+            closedMessage: getVal('setting-closed-message'),
+            shopLatitude: parseFloat(getVal('setting-lat')),
+            shopLongitude: parseFloat(getVal('setting-lng')),
+            minimumDeliveryPrice: parseFloat(getVal('setting-min-delivery-price')),
+            baseDeliveryDistanceKm: parseFloat(getVal('setting-base-distance')),
+            extraKmPrice: parseFloat(getVal('setting-extra-km-price')),
+            maxDeliveryKm: parseFloat(getVal('setting-max-distance')),
+            autoScheduleEnabled: getChecked('setting-auto-schedule'),
+            openingTime: getVal('setting-opening-time'),
+            closingTime: getVal('setting-closing-time'),
+            timezone: getVal('setting-timezone'),
             heroImages: this.currentHeroImages || []
         };
         await this.api('/api/settings', 'PUT', settings);
