@@ -4,6 +4,13 @@ const SUPABASE_URL = "https://your-project-url.supabase.co"; // User must replac
 const SUPABASE_ANON_KEY = "your-anon-key"; // User must replace this
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+async function getSupabaseAuthHeaders() {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  console.log(`Sending auth token: ${!!token}`);
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 const FCM_VAPID_KEY = "Z02lSpdHObXSkAYQOqbEVPF3qO40B7PkzieHdNsYG9k";
 const shopWhatsAppNumber = "212688943959";
 
@@ -1001,9 +1008,10 @@ function requestCurrentPosition() {
 async function upsertCustomerProfile(profile = state.customer, location = state.location) {
   if (!profile?.uid || !profile?.phone || !location) return;
   try {
+    const authHeaders = await getSupabaseAuthHeaders();
     await fetch("/api/users/upsert", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify({
         firebaseUid: profile.uid,
         phone: profile.phone,
@@ -1419,7 +1427,19 @@ async function refreshOrderHistory() {
   }
 
   try {
-    const response = await fetch(`/api/orders/customer?${params.toString()}`, { cache: "no-store" });
+    const authHeaders = await getSupabaseAuthHeaders();
+    if (!authHeaders.Authorization) {
+      console.warn("No Supabase session token yet, skipping orders fetch");
+      remoteOrderHistory = [];
+      isOrdersLoading = false;
+      renderOrderHistory();
+      return;
+    }
+
+    const response = await fetch(`/api/orders/customer?${params.toString()}`, {
+      cache: "no-store",
+      headers: authHeaders
+    });
     if (!response.ok) throw new Error("Could not load customer orders");
     const payload = await response.json();
     remoteOrderHistory = (payload.orders || []).map(order => ({
@@ -1597,7 +1617,16 @@ async function openOrderDetails(orderId) {
   if (savedPhone) params.set("phone", savedPhone);
   const fallbackOrder = getDisplayedOrderHistory().find(order => String(order.id) === String(orderId));
   try {
-    const response = await fetch(`/api/orders/customer/${orderId}?${params.toString()}`, { cache: "no-store" });
+    const authHeaders = await getSupabaseAuthHeaders();
+    if (!authHeaders.Authorization) {
+      console.warn("No Supabase session token yet, skipping order details fetch");
+      throw new Error("No Supabase session token yet");
+    }
+
+    const response = await fetch(`/api/orders/customer/${orderId}?${params.toString()}`, {
+      cache: "no-store",
+      headers: authHeaders
+    });
     if (!response.ok) throw new Error("Could not load order details");
     const order = await response.json();
     selectedOrderDetails = {
@@ -2773,10 +2802,17 @@ function buildOrderPayload(formData, cartSummary, whatsappMessage) {
 
 async function saveOrderBeforeWhatsapp(formData, cartSummary) {
   const whatsappMessage = buildOrderMessage(formData, { orderId: "__ORDER_ID__", cartSummary });
+  const authHeaders = await getSupabaseAuthHeaders();
+  if (!authHeaders.Authorization) {
+    console.warn("No Supabase session token yet, skipping order creation");
+    throw new Error("No Supabase session token yet");
+  }
+
   const response = await fetch("/api/orders", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      ...authHeaders
     },
     body: JSON.stringify(buildOrderPayload(formData, cartSummary, whatsappMessage))
   });

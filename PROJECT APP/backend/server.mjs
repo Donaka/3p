@@ -557,16 +557,40 @@ const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET || JWT_SECRET;
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return res.status(401).json({ error: "Token requis" });
+  if (!token) {
+    console.warn("[Auth] Missing Authorization header", {
+      method: req.method,
+      path: req.originalUrl || req.url
+    });
+    return res.status(401).json({ error: "Token requis" });
+  }
 
   jwt.verify(token, SUPABASE_JWT_SECRET, (err, user) => {
     if (err) {
       jwt.verify(token, JWT_SECRET, (err2, user2) => {
+        if (err2) {
+          console.warn("[Auth] Token verification failed", {
+            method: req.method,
+            path: req.originalUrl || req.url,
+            supabaseError: err.message,
+            legacyError: err2.message
+          });
+        }
         if (err2) return res.status(403).json({ error: "Token invalide ou expiré" });
+        console.log("[Auth] Legacy token verification success", {
+          method: req.method,
+          path: req.originalUrl || req.url,
+          userId: user2?.id || null
+        });
         req.user = user2;
         next();
       });
     } else {
+      console.log("[Auth] Supabase token verification success", {
+        method: req.method,
+        path: req.originalUrl || req.url,
+        userId: user?.sub || user?.id || null
+      });
       req.user = user;
       next();
     }
@@ -660,6 +684,8 @@ function normalizeOrderPayload(payload) {
     customerPhone,
     customerId,
     customerEmail: trimOrNull(payload.customerEmail),
+    firebaseUid: trimOrNull(payload.firebaseUid),
+    supabaseUid: trimOrNull(payload.supabaseUid),
     authProvider: payload.authProvider || 'phone',
     mode: payload.mode === "pickup" ? "pickup" : "delivery",
     address: trimOrNull(payload.address),
@@ -1197,6 +1223,10 @@ async function loadMenuSafe() {
 async function findExistingCustomer(client, order) {
   const clauses = [];
   const values = [];
+  if (order.supabaseUid) {
+    values.push(order.supabaseUid);
+    clauses.push(`supabase_uid = $${values.length}`);
+  }
   if (order.customerId) {
     values.push(order.customerId);
     clauses.push(`id = $${values.length}`);
@@ -1230,6 +1260,7 @@ async function upsertCustomer(client, order) {
         phone = COALESCE($3, phone),
         email = COALESCE($4, email),
         firebase_uid = COALESCE($5, firebase_uid),
+        supabase_uid = COALESCE($8, supabase_uid),
         auth_provider = COALESCE(NULLIF($7, ''), auth_provider),
         total_orders = total_orders + 1,
         total_spent = total_spent + $6,
@@ -1244,16 +1275,17 @@ async function upsertCustomer(client, order) {
       order.customerEmail,
       order.firebaseUid,
       order.total,
-      order.authProvider || 'phone'
+      order.authProvider || 'phone',
+      order.supabaseUid
     ]);
     return result.rows[0];
   }
 
   const result = await client.query(`
     INSERT INTO customers (
-      name, phone, email, firebase_uid, auth_provider, total_orders, total_spent, last_order_at
+      name, phone, email, firebase_uid, auth_provider, total_orders, total_spent, last_order_at, supabase_uid
     )
-    VALUES ($1, $2, $3, $4, $6, 1, $5, NOW())
+    VALUES ($1, $2, $3, $4, $6, 1, $5, NOW(), $7)
     RETURNING *
   `, [
     order.customerName || "",
@@ -1261,7 +1293,8 @@ async function upsertCustomer(client, order) {
     order.customerEmail,
     order.firebaseUid,
     order.total,
-    order.authProvider || 'phone'
+    order.authProvider || 'phone',
+    order.supabaseUid
   ]);
   return result.rows[0];
 }
@@ -1421,7 +1454,7 @@ async function createOrderRecord(order) {
       const subtotal = order.items.reduce((sum, i) => sum + i.lineTotal, 0);
       const total = Math.max(0, subtotal + deliveryFee - (order.discount || 0));
 
-      const supabaseUid = req.user?.sub || req.user?.id || null;
+      const supabaseUid = order.supabaseUid || null;
 
       const orderResult = await client.query(`
         INSERT INTO orders (
@@ -2515,13 +2548,19 @@ app.post("/api/orders", authenticateToken, asyncHandler(async (req, res) => {
       message: settings.closedMessage
     });
   }
-  const order = normalizeOrderPayload({ ...req.body, customerId: req.user.id });
+  const isLegacyCustomerToken = req.user?.role === "customer" && req.user?.id;
+  const order = normalizeOrderPayload({
+    ...req.body,
+    customerId: isLegacyCustomerToken ? req.user.id : null,
+    supabaseUid: req.user?.sub || null
+  });
   const result = await createOrderRecord(order);
   res.status(201).json(result);
 }));
 
-app.get("/api/orders/customer", asyncHandler(async (req, res) => {
+app.get("/api/orders/customer", authenticateToken, asyncHandler(async (req, res) => {
   const orders = await listCustomerOrders({
+    supabaseUid: req.user?.sub || null,
     firebaseUid: req.query.firebaseUid,
     email: req.query.email,
     phone: req.query.phone
@@ -2529,8 +2568,9 @@ app.get("/api/orders/customer", asyncHandler(async (req, res) => {
   res.json({ orders });
 }));
 
-app.get("/api/orders/customer/:id", asyncHandler(async (req, res) => {
+app.get("/api/orders/customer/:id", authenticateToken, asyncHandler(async (req, res) => {
   const order = await getCustomerOrderById(Number(req.params.id), {
+    supabaseUid: req.user?.sub || null,
     firebaseUid: req.query.firebaseUid,
     email: req.query.email,
     phone: req.query.phone

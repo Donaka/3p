@@ -3497,12 +3497,6 @@ button:active {
   transition: transform 200ms ease, box-shadow 200ms ease, background 200ms ease;
 }
 
-.google-login-button img {
-  width: 24px;
-  height: 24px;
-  object-fit: contain;
-}
-
 .google-login-button:hover {
   background: #f8f8f8;
   transform: translateY(-1px);
