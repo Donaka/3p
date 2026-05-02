@@ -29,32 +29,28 @@ const defaultShopSettings = {
 };
 
 const MIN_DELIVERY_FEE_MAD = 10;
-const AGADIR_COORDINATE_BOUNDS = { minLat: 29, maxLat: 31.2, minLng: -10.8, maxLng: -8 };
+function parseCoordinate(value) {
+  if (value === null || value === undefined || value === "") return NaN;
+  return Number(String(value).trim().replace(",", "."));
+}
 
 function isValidAgadirCoordinate(lat, lng) {
-  const latitude = Number(lat);
-  const longitude = Number(lng);
-  return Number.isFinite(latitude)
-    && Number.isFinite(longitude)
-    && latitude !== 0
-    && longitude !== 0
-    && latitude >= AGADIR_COORDINATE_BOUNDS.minLat
-    && latitude <= AGADIR_COORDINATE_BOUNDS.maxLat
-    && longitude >= AGADIR_COORDINATE_BOUNDS.minLng
-    && longitude <= AGADIR_COORDINATE_BOUNDS.maxLng;
+  const latitude = parseCoordinate(lat);
+  const longitude = parseCoordinate(lng);
+  return Number.isFinite(latitude) && Number.isFinite(longitude);
 }
 
 function getStoreLocation() {
-  const latitude = Number(state.settings.store_lat ?? state.settings.shopLatitude);
-  const longitude = Number(state.settings.store_lng ?? state.settings.shopLongitude);
+  const latitude = parseCoordinate(state.settings.store_lat ?? state.settings.restaurant_lat ?? state.settings.shopLatitude);
+  const longitude = parseCoordinate(state.settings.store_lng ?? state.settings.restaurant_lng ?? state.settings.shopLongitude);
   return isValidAgadirCoordinate(latitude, longitude) ? { latitude, longitude } : null;
 }
 
 function calculateDeliveryFee(distanceKm) {
   if (!Number.isFinite(Number(distanceKm)) || Number(distanceKm) < 0) return null;
-  const minFee = Math.max(MIN_DELIVERY_FEE_MAD, Math.round(Number(state.settings.delivery_min_fee ?? state.settings.minimumDeliveryPrice) || 0));
-  const baseDistance = Math.max(0, Number(state.settings.baseDeliveryDistanceKm) || 0);
-  const perKm = Math.max(0, Number(state.settings.delivery_fee_per_km ?? state.settings.deliveryFeePerKm ?? state.settings.extraKmPrice ?? state.settings.deliveryPricePerKm) || 0);
+  const minFee = Math.max(MIN_DELIVERY_FEE_MAD, Math.round(parseCoordinate(state.settings.delivery_min_fee ?? state.settings.minimumDeliveryPrice) || 0));
+  const baseDistance = Math.max(0, parseCoordinate(state.settings.delivery_base_km ?? state.settings.baseDeliveryDistanceKm) || 0);
+  const perKm = Math.max(0, parseCoordinate(state.settings.delivery_fee_per_km ?? state.settings.deliveryFeePerKm ?? state.settings.extraKmPrice ?? state.settings.deliveryPricePerKm) || 0);
   return Math.max(minFee, Math.round(minFee + Math.ceil(Math.max(0, distanceKm - baseDistance)) * perKm));
 }
 
@@ -2697,7 +2693,7 @@ function applyCapturedLocation(position) {
   } else if (!isValidAgadirCoordinate(state.location.latitude, state.location.longitude)) {
     setLocationStatus("Position GPS invalide");
     showToast("Position GPS invalide");
-  } else if (!getMatchingDeliveryZone(getDistanceKm(shopLocation, state.location)) && Number(state.settings.maxDeliveryKm) > 0 && getDistanceKm(shopLocation, state.location) > Number(state.settings.maxDeliveryKm)) {
+  } else if (!getMatchingDeliveryZone(getDistanceKm(shopLocation, state.location)) && parseCoordinate(state.settings.delivery_max_distance_km ?? state.settings.maxDeliveryKm) > 0 && getDistanceKm(shopLocation, state.location) > parseCoordinate(state.settings.delivery_max_distance_km ?? state.settings.maxDeliveryKm)) {
     setLocationStatus(`${t("outsideAgadir")} ${mapLink}`);
     showToast(t("outsideAgadir"));
   } else {
@@ -2776,7 +2772,8 @@ function canDeliverToCurrentLocation(showMessage = false) {
     return false;
   }
   const distanceKm = getDistanceKm(shopLocation, state.location);
-  if (Number(state.settings.maxDeliveryKm) > 0 && distanceKm > Number(state.settings.maxDeliveryKm)) {
+  const maxDeliveryKm = parseCoordinate(state.settings.delivery_max_distance_km ?? state.settings.maxDeliveryKm);
+  if (maxDeliveryKm > 0 && distanceKm > maxDeliveryKm) {
     if (showMessage) {
       setLocationStatus(t("outsideAgadir"));
       showToast(t("outsideAgadir"));
