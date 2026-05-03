@@ -200,8 +200,8 @@ async function ensureDatabase() {
           );
         `);
         await client.query(`
-          ALTER TABLE orders ADD COLUMN IF NOT EXISTS supabase_uid TEXT;
-          CREATE INDEX IF NOT EXISTS idx_orders_supabase_uid ON orders(supabase_uid);
+          ALTER TABLE customers ADD COLUMN IF NOT EXISTS supabase_uid TEXT;
+          CREATE INDEX IF NOT EXISTS idx_customers_supabase_uid ON customers(supabase_uid);
         `);
         await client.query(`
           CREATE UNIQUE INDEX IF NOT EXISTS customers_phone_unique
@@ -226,6 +226,7 @@ async function ensureDatabase() {
             customer_phone TEXT NOT NULL,
             customer_email TEXT,
             firebase_uid TEXT,
+            supabase_uid TEXT,
             mode TEXT NOT NULL CHECK (mode IN ('delivery', 'pickup')),
             address TEXT,
             latitude DOUBLE PRECISION,
@@ -250,6 +251,10 @@ async function ensureDatabase() {
             status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'accepted', 'preparing', 'ready', 'delivered', 'cancelled')),
             customer_id BIGINT REFERENCES customers(id) ON DELETE SET NULL
           );
+        `);
+        await client.query(`
+          ALTER TABLE orders ADD COLUMN IF NOT EXISTS supabase_uid TEXT;
+          CREATE INDEX IF NOT EXISTS idx_orders_supabase_uid ON orders(supabase_uid);
         `);
         await client.query(`
           CREATE INDEX IF NOT EXISTS orders_created_at_idx ON orders(created_at DESC);
