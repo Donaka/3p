@@ -8,6 +8,8 @@ import cors from "cors";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { DateTime } from "luxon";
+import { createClient } from "@supabase/supabase-js";
+
 
 
 const root = fileURLToPath(new URL(".", import.meta.url));
@@ -24,6 +26,10 @@ const INFOBIP_BASE_URL = process.env.INFOBIP_BASE_URL || "https://55ejqz.api.inf
 const INFOBIP_SMS_FROM = process.env.INFOBIP_SMS_FROM || "3P";
 const OTP_CHANNEL = process.env.OTP_CHANNEL || "sms";
 const JWT_SECRET = process.env.JWT_SECRET || "3p_secret_key_2026_!#";
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
 
 const app = express();
 app.use(cors());
@@ -637,76 +643,40 @@ function generateToken(customer) {
   }, JWT_SECRET, { expiresIn: '30d' });
 }
 
-const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET || JWT_SECRET;
-
-const authenticateToken = (req, res, next) => {
+const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
+  console.log("[Auth] Header exists", !!authHeader);
   const token = authHeader && authHeader.split(' ')[1];
+  
   if (!token) {
-    console.warn("[Auth] Missing Authorization header", {
-      method: req.method,
-      path: req.originalUrl || req.url
-    });
-    createErrorLog({
-      message: "Missing Authorization header",
-      context: {
-        scope: "auth",
-        method: req.method,
-        path: req.originalUrl || req.url
-      }
-    }).catch(error => console.error("[ErrorLog] Failed", error.message));
-    return res.status(401).json({
-      error: "AUTH_REQUIRED",
-      message: "Veuillez vous reconnecter pour commander."
-    });
+    return res.status(401).json({ error: "AUTH_REQUIRED" });
   }
 
-  jwt.verify(token, SUPABASE_JWT_SECRET, (err, user) => {
-    if (err) {
-      jwt.verify(token, JWT_SECRET, (err2, user2) => {
-        if (err2) {
-          console.warn("[Auth] Token verification failed", {
-            method: req.method,
-            path: req.originalUrl || req.url,
-            supabaseError: err.message,
-            legacyError: err2.message
-          });
-          createErrorLog({
-            message: "Token verification failed",
-            stack: `${err.message}\n${err2.message}`,
-            context: {
-              scope: "auth",
-              method: req.method,
-              path: req.originalUrl || req.url
-            }
-          }).catch(error => console.error("[ErrorLog] Failed", error.message));
-        }
-        if (err2) {
-          const expired = err.name === "TokenExpiredError" || err2.name === "TokenExpiredError";
-          return res.status(403).json({
-            error: expired ? "TOKEN_EXPIRED" : "TOKEN_INVALID",
-            message: "Veuillez vous reconnecter pour commander."
-          });
-        }
-        console.log("[Auth] Legacy token verification success", {
-          method: req.method,
-          path: req.originalUrl || req.url,
-          userId: user2?.id || null
-        });
-        req.user = user2;
-        next();
-      });
-    } else {
-      console.log("[Auth] Supabase token verification success", {
+  try {
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+    
+    if (error || !user) {
+      console.warn("[Auth] Token verification failed", {
         method: req.method,
         path: req.originalUrl || req.url,
-        userId: user?.sub || user?.id || null
+        supabaseError: error?.message || "User not found"
       });
-      req.user = user;
-      next();
+      return res.status(401).json({ 
+        error: "TOKEN_INVALID", 
+        details: error?.message || "User not found" 
+      });
     }
-  });
+
+    console.log("[Auth] Supabase user verified", user.id);
+    req.user = user;
+    req.supabase_uid = user.id;
+    next();
+  } catch (err) {
+    console.error("[Auth] Unexpected error", err);
+    return res.status(401).json({ error: "TOKEN_INVALID", details: err.message });
+  }
 };
+
 
 function normalizeSettings(settings = {}) {
   const shopCoordinates = normalizeCoordinatePair(
@@ -2598,7 +2568,7 @@ const asyncHandler = (fn) => (req, res, next) => {
         await createErrorLog({
           message: error.message,
           stack: error.stack,
-          userId: req.user?.sub || req.user?.id || req.body?.userId || "",
+          userId: req.user?.id || req.body?.userId || "",
           context: {
             scope: "backend",
             method: req.method,
@@ -2823,7 +2793,7 @@ app.post("/api/orders", authenticateToken, asyncHandler(async (req, res) => {
   const order = normalizeOrderPayload({
     ...req.body,
     customerId: isLegacyCustomerToken ? req.user.id : null,
-    supabaseUid: req.user?.sub || null
+    supabaseUid: req.user?.id || null
   });
   const result = await createOrderRecord(order);
   res.status(201).json(result);
@@ -2831,7 +2801,7 @@ app.post("/api/orders", authenticateToken, asyncHandler(async (req, res) => {
 
 app.get("/api/orders/customer", authenticateToken, asyncHandler(async (req, res) => {
   const orders = await listCustomerOrders({
-    supabaseUid: req.user?.sub || null,
+    supabaseUid: req.user?.id || null,
     firebaseUid: req.query.firebaseUid,
     email: req.query.email,
     phone: req.query.phone
@@ -2841,7 +2811,7 @@ app.get("/api/orders/customer", authenticateToken, asyncHandler(async (req, res)
 
 app.get("/api/orders/customer/:id", authenticateToken, asyncHandler(async (req, res) => {
   const order = await getCustomerOrderById(Number(req.params.id), {
-    supabaseUid: req.user?.sub || null,
+    supabaseUid: req.user?.id || null,
     firebaseUid: req.query.firebaseUid,
     email: req.query.email,
     phone: req.query.phone
