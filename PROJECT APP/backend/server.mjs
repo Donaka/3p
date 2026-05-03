@@ -1938,6 +1938,13 @@ async function listCustomerOrders({ firebaseUid = "", email = "", phone = "", su
       values.push(supabaseUid);
       conditions.push(`o.supabase_uid = $${values.length}`);
     }
+    // Fallback by phone if we have it from user session
+    if (phone) {
+      const normalizedPhone = normalizeMoroccoPhone(phone);
+      values.push(normalizedPhone);
+      conditions.push(`o.customer_phone = $${values.length}`);
+    }
+
     if (firebaseUid) {
       values.push(firebaseUid);
       conditions.push(`o.firebase_uid = $${values.length}`);
@@ -1955,6 +1962,7 @@ async function listCustomerOrders({ firebaseUid = "", email = "", phone = "", su
       throw new Error("Customer identifier is required");
     }
 
+    console.log("CUSTOMER ORDERS REQUEST USER", supabaseUid || "anonymous");
     const [ordersResult, activeOrdersResult] = await Promise.all([
       dbPool.query(`
       SELECT o.*
@@ -1969,6 +1977,9 @@ async function listCustomerOrders({ firebaseUid = "", email = "", phone = "", su
         WHERE status IN ('new', 'accepted', 'preparing')
       `)
     ]);
+
+    console.log("CUSTOMER ORDERS COUNT", ordersResult.rows.length);
+
 
     const orderIds = ordersResult.rows.map(row => row.id);
     let itemsByOrder = new Map();
@@ -2209,7 +2220,13 @@ async function upsertDeviceToken({ customerId = null, firebaseUid = "", phone = 
       String(platform || "android").trim() || "android",
       cleanToken
     ]);
+    console.log("DEVICE TOKEN SAVED", { 
+      token: cleanToken.substring(0, 10) + "...", 
+      phone, 
+      platform 
+    });
     return result.rows[0];
+
   });
 }
 
@@ -2851,18 +2868,27 @@ app.post("/api/orders", authenticateToken, asyncHandler(async (req, res) => {
     supabaseUid: req.user?.id || null
   });
   const result = await createOrderRecord(order);
+  console.log("ORDER SAVED FOR USER", { 
+    orderId: result?.order?.id, 
+    supabase_uid: req.user?.id || req.supabase_uid, 
+    phone: order.customerPhone 
+  });
   res.status(201).json(result);
+
 }));
 
 app.get("/api/orders/customer", authenticateToken, asyncHandler(async (req, res) => {
+  console.log("CUSTOMER ORDERS REQUEST USER", req.user?.id || req.supabase_uid);
   const orders = await listCustomerOrders({
-    supabaseUid: req.user?.id || null,
+    supabaseUid: req.user?.id || req.supabase_uid || null,
     firebaseUid: req.query.firebaseUid,
     email: req.query.email,
     phone: req.query.phone
   });
+  console.log("CUSTOMER ORDERS COUNT", orders?.length || 0);
   res.json({ orders });
 }));
+
 
 app.get("/api/orders/customer/:id", authenticateToken, asyncHandler(async (req, res) => {
   const order = await getCustomerOrderById(Number(req.params.id), {
@@ -3142,12 +3168,14 @@ async function handleNotifyRequest(payload) {
   let targetTokens = new Set();
   if (dbPool) {
     const result = await dbPool.query("SELECT token, firebase_uid, phone FROM device_tokens");
+    console.log("FETCHED PUSH TOKENS FROM DB", result.rows.length);
     for (const row of result.rows) {
       let match = (customerId === "ALL");
       if (!match && firebaseUid && row.firebase_uid === firebaseUid) match = true;
-      if (!match && phone && normalizePhone(row.phone) === normalizePhone(phone)) match = true;
+      if (!match && phone && normalizeMoroccoPhone(row.phone) === normalizeMoroccoPhone(phone)) match = true;
       if (match && row.token) targetTokens.add(row.token);
     }
+
   }
 
   if (targetTokens.size === 0) {
