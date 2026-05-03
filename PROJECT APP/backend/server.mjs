@@ -26,9 +26,21 @@ const INFOBIP_BASE_URL = process.env.INFOBIP_BASE_URL || "https://55ejqz.api.inf
 const INFOBIP_SMS_FROM = process.env.INFOBIP_SMS_FROM || "3P";
 const OTP_CHANNEL = process.env.OTP_CHANNEL || "sms";
 const JWT_SECRET = process.env.JWT_SECRET || "3p_secret_key_2026_!#";
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+let supabaseAdmin = null;
+
+if (supabaseUrl && supabaseServiceRoleKey) {
+  try {
+    supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey);
+    console.log("Supabase Admin initialized SUCCESS");
+  } catch (e) {
+    console.error("Error initializing Supabase Admin:", e.message);
+  }
+} else {
+  console.warn("SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing. Authentication will fail.");
+}
+
 
 
 const app = express();
@@ -651,6 +663,12 @@ const authenticateToken = async (req, res, next) => {
   if (!token) {
     return res.status(401).json({ error: "AUTH_REQUIRED" });
   }
+
+  if (!supabaseAdmin) {
+    console.error("[Auth] supabaseAdmin is not initialized. Check environment variables.");
+    return res.status(500).json({ error: "SUPABASE_ADMIN_NOT_CONFIGURED" });
+  }
+
 
   try {
     const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
