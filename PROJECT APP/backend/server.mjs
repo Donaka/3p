@@ -564,11 +564,25 @@ function parseSettingsNumber(settings, primaryKey, fallback = null, ...aliases) 
 }
 
 function normalizeCoordinatePair(lat, lng) {
-  const latitude = Number(String(lat ?? "").trim().replace(",", "."));
-  const longitude = Number(String(lng ?? "").trim().replace(",", "."));
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return { latitude: null, longitude: null, valid: false };
+  let latitude = Number(String(lat ?? "").trim().replace(",", "."));
+  let longitude = Number(String(lng ?? "").trim().replace(",", "."));
+  
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return { latitude: null, longitude: null, valid: false };
+  }
+
+  // Detect swapped Morocco coordinates
+  // Morocco Lat: 20 to 36, Lng: -18 to -1
+  if (latitude >= -18 && latitude <= -1 && longitude >= 20 && longitude <= 36) {
+    console.log("BACKEND DETECTED SWAPPED COORDS - SWAPPING", { latitude, longitude });
+    const tmp = latitude;
+    latitude = longitude;
+    longitude = tmp;
+  }
+
   return { latitude, longitude, valid: true };
 }
+
 
 function calculateDistanceKm(from, to) {
   const start = normalizeCoordinatePair(from?.latitude, from?.longitude);
@@ -1581,10 +1595,20 @@ async function createOrderRecord(order) {
           needsManualDeliveryCheck = true;
         }
         if (customerCoordinates.valid && storeCoordinates.valid) {
+          // Strict Morocco Validation
+          const { latitude: cLat, longitude: cLng } = customerCoordinates;
+          if (cLat < 20 || cLat > 36 || cLng < -18 || cLng > -1) {
+            const error = new Error("Position GPS invalide ou hors Maroc");
+            error.status = 400;
+            error.code = "INVALID_CUSTOMER_LOCATION";
+            throw error;
+          }
+
           deliveryDistanceKm = calculateDistanceKm(
             { latitude: storeCoordinates.latitude, longitude: storeCoordinates.longitude },
-            { latitude: customerCoordinates.latitude, longitude: customerCoordinates.longitude }
+            { latitude: cLat, longitude: cLng }
           );
+
           if (!Number.isFinite(deliveryDistanceKm)) {
             const error = new Error("Position du restaurant non configurée");
             error.status = 400;
@@ -1609,7 +1633,15 @@ async function createOrderRecord(order) {
           error.status = 400;
           throw error;
         }
-        console.log("DELIVERY CALC", { distance_km: deliveryDistanceKm, delivery_fee: deliveryFee });
+        console.log("DELIVERY DISTANCE DEBUG", {
+          store_lat: storeCoordinates.latitude,
+          store_lng: storeCoordinates.longitude,
+          customer_lat: customerCoordinates.latitude,
+          customer_lng: customerCoordinates.longitude,
+          distance_km: deliveryDistanceKm,
+          delivery_fee: deliveryFee
+        });
+
       }
 
       const distanceMinutes = Math.max(0, Math.round((Number(deliveryDistanceKm) || 0) * 3));
