@@ -836,7 +836,10 @@ function normalizeOrderPayload(payload) {
     lineTotal: parseMoney(item.lineTotal)
   })).filter(item => item.productName && item.quantity > 0) : [];
 
-  const customerPhone = normalizeMoroccoPhone(payload.customerPhone);
+  // Defensive phone normalization
+  const rawPhone = payload.customer_phone || payload.customerPhone || payload.phone || payload.telephone || (payload.customer && payload.customer.phone) || "";
+  const customerPhone = normalizeMoroccoPhone(rawPhone);
+  
   const customerId = payload.customerId || null;
   const latitude = parseOptionalNumber(payload.latitude);
   const longitude = parseOptionalNumber(payload.longitude);
@@ -844,37 +847,45 @@ function normalizeOrderPayload(payload) {
   const customerLng = parseOptionalNumber(payload.customer_lng ?? payload.customerLng ?? payload.customerLongitude ?? payload.longitude);
   const locationAccuracy = parseOptionalNumber(payload.locationAccuracy);
   const locationTimestamp = trimOrNull(payload.locationTimestamp);
-  const total = parseMoney(payload.total, NaN);
-  if (!customerPhone && !customerId) throw new Error("Customer identification is required");
+  const subtotal = parseMoney(payload.subtotal, 0);
+  const discount = parseMoney(payload.discount, 0);
+  
+  // Pickup logic: force zero delivery fee and null distance
+  const isPickup = payload.mode === "pickup" || payload.orderType === "pickup";
+  const deliveryFee = isPickup ? 0 : parseMoney(payload.deliveryFee || payload.delivery_fee, 0);
+  const distanceKm = isPickup ? null : parseOptionalNumber(payload.distanceKm || payload.distance_km);
+  
+  const total = parseMoney(payload.total, subtotal + deliveryFee - discount);
+
+  if (!customerPhone) throw new Error("CUSTOMER_PHONE_REQUIRED");
   if (!items.length) throw new Error("Cart items are required");
-  if (!Number.isFinite(total) || total <= 0) throw new Error("Total is required");
+  if (!Number.isFinite(total) || total < 0) throw new Error("Total is required");
 
   return {
-    customerName: String(payload.customerName || "").trim(),
+    customerName: String(payload.customer_name || payload.customerName || payload.name || (payload.customer && payload.customer.name) || "").trim(),
     customerPhone,
     customerId,
     customerEmail: trimOrNull(payload.customerEmail),
     firebaseUid: trimOrNull(payload.firebaseUid),
     supabaseUid: trimOrNull(payload.supabaseUid),
     authProvider: payload.authProvider || 'phone',
-    mode: payload.mode === "pickup" ? "pickup" : "delivery",
-    orderType: payload.mode === "pickup" ? "pickup" : "delivery",
-    address: trimOrNull(payload.address),
-    latitude,
-    longitude,
-    customerLat,
-    customerLng,
-    locationAccuracy,
-    locationTimestamp,
-    distanceKm: parseOptionalNumber(payload.distanceKm),
-    deliveryZoneRadius: parseOptionalNumber(payload.deliveryZoneRadius),
-    deliveryFee: parseMoney(payload.deliveryFee),
-    subtotal: parseMoney(payload.subtotal),
-    discount: parseMoney(payload.discount),
+    mode: isPickup ? "pickup" : "delivery",
+    orderType: isPickup ? "pickup" : "delivery",
+    address: isPickup ? "À emporter" : trimOrNull(payload.address),
+    latitude: isPickup ? null : latitude,
+    longitude: isPickup ? null : longitude,
+    customerLat: isPickup ? null : customerLat,
+    customerLng: isPickup ? null : customerLng,
+    locationAccuracy: isPickup ? null : locationAccuracy,
+    locationTimestamp: isPickup ? null : locationTimestamp,
+    distanceKm,
+    deliveryFee,
+    subtotal,
+    discount,
     total,
-    needsManualDeliveryCheck: payload.needs_manual_delivery_check === true || payload.needsManualDeliveryCheck === true,
     promoCode: trimOrNull(payload.promoCode),
-    whatsappMessage: String(payload.whatsappMessage || "").trim(),
+    note: String(payload.note || "").trim(),
+    whatsappMessage: trimOrNull(payload.whatsappMessage),
     items
   };
 }
@@ -2937,10 +2948,18 @@ app.post("/api/orders", authenticateToken, asyncHandler(async (req, res) => {
       message: settings.closedMessage
     });
   }
-  const order = normalizeOrderPayload({
-    ...req.body,
-    supabaseUid: req.supabase_uid || (req.user?.app_metadata ? req.user.id : null)
-  });
+  let order;
+  try {
+    order = normalizeOrderPayload({
+      ...req.body,
+      supabaseUid: req.supabase_uid || (req.user?.app_metadata ? req.user.id : null)
+    });
+  } catch (err) {
+    if (err.message === "CUSTOMER_PHONE_REQUIRED") {
+      return res.status(400).json({ error: "CUSTOMER_PHONE_REQUIRED", message: "Téléphone client requis" });
+    }
+    throw err;
+  }
   const result = await createOrderRecord(order);
   console.log("ORDER SAVED FOR USER", { 
     orderId: result?.order?.id, 
