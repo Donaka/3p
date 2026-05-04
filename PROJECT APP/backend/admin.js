@@ -184,6 +184,7 @@ const admin = {
             case 'dashboard': mainContent.innerHTML = this.renderDashboardTab(); break;
             case 'orders': mainContent.innerHTML = this.renderOrdersTab(); break;
             case 'menu': mainContent.innerHTML = this.renderMenuTab(); break;
+            case 'promo': mainContent.innerHTML = this.renderPromoCodesTab(); break;
             case 'settings': mainContent.innerHTML = this.renderSettingsTab(); break;
             case 'options': mainContent.innerHTML = this.renderOptionsTab(); break;
             case 'push': mainContent.innerHTML = this.renderNotificationsTab(); break;
@@ -197,6 +198,7 @@ const admin = {
             case 'dashboard': this.loadDashboard(); break;
             case 'orders': this.loadOrders(); break;
             case 'menu': this.loadMenu(); break;
+            case 'promo': this.loadPromoCodes(); break;
             case 'settings': this.loadSettings(); break;
             case 'options': this.loadOptions(); break;
             case 'push': this.loadPushInfo(); break;
@@ -378,6 +380,124 @@ const admin = {
                 <button type="submit" id="sendPushBtn" class="primary-btn" style="width:100%; margin-top:20px;">🚀 Envoyer la notification</button>
             </form>
         `;
+    },
+
+    renderPromoCodesTab() {
+        return `
+            <header class="tab-header">
+                <h1>Codes Promo</h1>
+                <div class="header-actions">
+                    <button class="primary-btn" onclick="admin.showAddPromoCodeModal()">+ Ajouter un code</button>
+                </div>
+            </header>
+            <div class="table-container">
+                <table id="promo-codes-table">
+                    <thead>
+                        <tr>
+                            <th>Code</th>
+                            <th>Type</th>
+                            <th>Valeur</th>
+                            <th>Min. Commande</th>
+                            <th>Utilisé</th>
+                            <th>Statut</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        `;
+    },
+
+    async loadPromoCodes() {
+        const data = await this.api('/api/admin/promo-codes');
+        const tbody = document.querySelector('#promo-codes-table tbody');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        
+        data.promos.forEach(p => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${p.code}</strong></td>
+                <td>${p.type === 'percent' ? 'Pourcentage' : 'Fixe'}</td>
+                <td>${p.value}${p.type === 'percent' ? '%' : ' MAD'}</td>
+                <td>${p.min_order_amount} MAD</td>
+                <td>${p.used_count}${p.usage_limit ? ` / ${p.usage_limit}` : ''}</td>
+                <td><span class="status-badge ${p.active ? 'status-ready' : 'status-cancelled'}">${p.active ? 'ACTIF' : 'INACTIF'}</span></td>
+                <td>
+                    <button class="primary-btn btn-sm" onclick="admin.showEditPromoCodeModal(${p.id})">Modifier</button>
+                    <button class="danger-btn btn-sm" onclick="admin.deletePromoCode(${p.id})">Supprimer</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    },
+
+    showAddPromoCodeModal() {
+        this.showPromoCodeModal();
+    },
+
+    async showEditPromoCodeModal(id) {
+        const data = await this.api('/api/admin/promo-codes');
+        const promo = data.promos.find(p => p.id === id);
+        this.showPromoCodeModal(promo);
+    },
+
+    showPromoCodeModal(promo = null) {
+        this.showModal(promo ? 'Modifier le code promo' : 'Ajouter un code promo', `
+            <form id="promo-code-form" class="admin-form">
+                <div class="form-row"><label>Code</label><input type="text" id="promo-code" value="${promo?.code || ''}" required></div>
+                <div class="form-row"><label>Type</label>
+                    <select id="promo-type">
+                        <option value="percent" ${promo?.type === 'percent' ? 'selected' : ''}>Pourcentage (%)</option>
+                        <option value="fixed" ${promo?.type === 'fixed' ? 'selected' : ''}>Montant Fixe (MAD)</option>
+                    </select>
+                </div>
+                <div class="form-row"><label>Valeur</label><input type="number" id="promo-value" value="${promo?.value || ''}" step="0.01" required></div>
+                <div class="form-row"><label>Commande Min (MAD)</label><input type="number" id="promo-min" value="${promo?.min_order_amount || 0}"></div>
+                <div class="form-row"><label>Remise Max (MAD)</label><input type="number" id="promo-max-discount" value="${promo?.max_discount || ''}"></div>
+                <div class="form-row"><label>Limite d'utilisation</label><input type="number" id="promo-limit" value="${promo?.usage_limit || ''}"></div>
+                <div class="form-row"><label>Actif</label><input type="checkbox" id="promo-active" ${promo ? (promo.active ? 'checked' : '') : 'checked'}></div>
+                <button type="submit" class="primary-btn" style="width:100%; margin-top:20px">${promo ? 'Mettre à jour' : 'Ajouter'}</button>
+            </form>
+        `);
+
+        document.getElementById('promo-code-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            this.savePromoCode(promo?.id);
+        });
+    },
+
+    async savePromoCode(id) {
+        const promo = {
+            code: document.getElementById('promo-code').value,
+            type: document.getElementById('promo-type').value,
+            value: parseFloat(document.getElementById('promo-value').value),
+            min_order_amount: parseFloat(document.getElementById('promo-min').value || 0),
+            max_discount: parseFloat(document.getElementById('promo-max-discount').value) || null,
+            usage_limit: parseInt(document.getElementById('promo-limit').value) || null,
+            active: document.getElementById('promo-active').checked
+        };
+
+        try {
+            if (id) {
+                await this.api(`/api/admin/promo-codes/${id}`, 'PATCH', promo);
+            } else {
+                await this.api('/api/admin/promo-codes', 'POST', promo);
+            }
+            this.hideModal();
+            this.loadPromoCodes();
+            this.showToast('Code promo enregistré !');
+        } catch (e) {
+            alert('Erreur: ' + e.message);
+        }
+    },
+
+    async deletePromoCode(id) {
+        if (!confirm('Supprimer ce code promo ?')) return;
+        await this.api(`/api/admin/promo-codes/${id}`, 'DELETE');
+        this.loadPromoCodes();
+        this.showToast('Code promo supprimé');
     },
 
     async loadDashboard() {

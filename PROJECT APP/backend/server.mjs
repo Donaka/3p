@@ -283,6 +283,26 @@ async function ensureDatabase() {
           ADD CONSTRAINT orders_status_check
           CHECK (status IN ('new', 'accepted', 'preparing', 'ready', 'delivered', 'cancelled'))
         `);
+        await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS note TEXT;`);
+        await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS promo_code TEXT;`);
+        await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount NUMERIC(12, 2) NOT NULL DEFAULT 0;`);
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS promo_codes (
+            id SERIAL PRIMARY KEY,
+            code TEXT UNIQUE NOT NULL,
+            type TEXT NOT NULL,
+            value NUMERIC NOT NULL,
+            min_order_amount NUMERIC DEFAULT 0,
+            max_discount NUMERIC NULL,
+            active BOOLEAN DEFAULT true,
+            starts_at TIMESTAMP NULL,
+            ends_at TIMESTAMP NULL,
+            usage_limit INTEGER NULL,
+            used_count INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT NOW()
+          );
+        `);
+
         await client.query(`
           CREATE TABLE IF NOT EXISTS settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -683,34 +703,44 @@ const authenticateToken = async (req, res, next) => {
     return res.status(401).json({ error: "AUTH_REQUIRED" });
   }
 
-  if (!supabaseAdmin) {
-    console.error("[Auth] supabaseAdmin is not initialized. Check environment variables.");
-    return res.status(500).json({ error: "SUPABASE_ADMIN_NOT_CONFIGURED" });
-  }
-
-
+  // Check if it's our custom JWT
   try {
-    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
-    
-    if (error || !user) {
-      console.warn("[Auth] Token verification failed", {
-        method: req.method,
-        path: req.originalUrl || req.url,
-        supabaseError: error?.message || "User not found"
-      });
-      return res.status(401).json({ 
-        error: "TOKEN_INVALID", 
-        details: error?.message || "User not found" 
-      });
+    const decoded = jwt.verify(token, JWT_SECRET);
+    console.log("[Auth] Custom JWT verified", decoded.id);
+    req.user = decoded;
+    // For compatibility with code expecting supabase_uid
+    if (decoded.role === 'customer') {
+      req.supabase_uid = decoded.supabase_uid || null;
+    }
+    return next();
+  } catch (jwtErr) {
+    // Not a custom JWT, try Supabase
+    if (!supabaseAdmin) {
+      console.error("[Auth] supabaseAdmin is not initialized.");
+      return res.status(500).json({ error: "SUPABASE_ADMIN_NOT_CONFIGURED" });
     }
 
-    console.log("[Auth] Supabase user verified", user.id);
-    req.user = user;
-    req.supabase_uid = user.id;
-    next();
-  } catch (err) {
-    console.error("[Auth] Unexpected error", err);
-    return res.status(401).json({ error: "TOKEN_INVALID", details: err.message });
+    try {
+      const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+      
+      if (error || !user) {
+        console.warn("[Auth] Token verification failed", {
+          supabaseError: error?.message || "User not found"
+        });
+        return res.status(401).json({ 
+          error: "TOKEN_INVALID", 
+          details: error?.message || "User not found" 
+        });
+      }
+
+      console.log("[Auth] Supabase user verified", user.id);
+      req.user = user;
+      req.supabase_uid = user.id;
+      next();
+    } catch (err) {
+      console.error("[Auth] Unexpected error", err);
+      return res.status(401).json({ error: "TOKEN_INVALID", details: err.message });
+    }
   }
 };
 
@@ -1665,46 +1695,45 @@ async function createOrderRecord(order) {
 
       const supabaseUid = order.supabaseUid || null;
 
-      const orderResult = await client.query(`
+      const promoCode = order.promoCode || null;
+      const note = order.note || null;
+      const mode = order.mode;
+      const address = order.address;
+      const latitude = order.latitude;
+      const longitude = order.longitude;
+      const customerId = customer.id;
+      const firebaseUid = order.firebaseUid;
+      const locationAccuracy = order.locationAccuracy;
+      const locationTimestamp = order.locationTimestamp;
+      const orderType = order.orderType || order.mode;
+      const customerLat = order.customerLat;
+      const customerLng = order.customerLng;
+      const whatsappMessage = order.whatsappMessage;
+
+      const values = [
+        customerId, firebaseUid, supabaseUid, mode, address, latitude, longitude,
+        deliveryDistanceKm, whatsappMessage, initialStatus, deliveryFee, subtotal, order.discount || 0, total,
+        locationAccuracy, locationTimestamp, orderType, customerLat, customerLng,
+        needsManualDeliveryCheck, promoCode, note
+      ];
+      
+      const insertResult = await client.query(`
         INSERT INTO orders (
-          customer_name, customer_phone, customer_email, firebase_uid,
-          mode, order_type, address, latitude, longitude, customer_lat, customer_lng, needs_manual_delivery_check, location_accuracy, location_timestamp, distance_km, delivery_zone_radius, accepted_at, ready_at,
-          accepted_until, preparing_until, estimated_delivery_minutes,
-          delivery_fee, subtotal, discount, total, promo_code, whatsapp_message, status, customer_id, supabase_uid
+          customer_id, firebase_uid, supabase_uid, mode, address, latitude, longitude,
+          distance_km, whatsapp_message, status, delivery_fee, subtotal, discount, total,
+          location_accuracy, location_timestamp, order_type, customer_lat, customer_lng,
+          needs_manual_delivery_check, promo_code, note
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULL, $17, $18, $19, NULL, $20, $21, $22, $23, $24, $25, $26, $27, $28)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
         RETURNING *
-      `, [
-        order.customerName || "",
-        order.customerPhone,
-        order.customerEmail,
-        order.firebaseUid,
-        order.mode,
-        order.orderType || order.mode,
-        order.address,
-        order.latitude,
-        order.longitude,
-        order.customerLat,
-        order.customerLng,
-        needsManualDeliveryCheck,
-        order.locationAccuracy,
-        order.locationTimestamp,
-        deliveryDistanceKm,
-        order.deliveryZoneRadius,
-        pickupReadyAt,
-        acceptedUntil,
-        preparingUntil,
-        deliveryFee,
-        subtotal,
-        order.discount || 0,
-        total,
-        order.promoCode,
-        order.whatsappMessage,
-        initialStatus,
-        customer.id,
-        supabaseUid
-      ]);
-      let savedOrder = orderResult.rows[0];
+      `, values);
+      let savedOrder = insertResult.rows[0];
+      
+      // Update used_count for promo code
+      if (promoCode) {
+        await client.query("UPDATE promo_codes SET used_count = used_count + 1 WHERE code = $1", [promoCode]);
+      }
+
       savedOrder.estimated_time = estimatedTime;
       const finalWhatsappMessage = String(order.whatsappMessage || "").replaceAll("__ORDER_ID__", String(savedOrder.id));
       if (finalWhatsappMessage !== savedOrder.whatsapp_message) {
@@ -1929,66 +1958,117 @@ async function listCustomers(search = "") {
   });
 }
 
-async function listCustomerOrders({ firebaseUid = "", email = "", phone = "", supabaseUid = "" } = {}) {
+async function listCustomerOrders(supabaseUid) {
+  if (!supabaseUid) return [];
+
   return withDatabase(async () => {
-    const settings = await loadSettingsRowDirect();
-    const values = [];
-    const conditions = [];
-    if (supabaseUid) {
-      values.push(supabaseUid);
-      conditions.push(`o.supabase_uid = $${values.length}`);
-    }
-    // Fallback by phone if we have it from user session
-    if (phone) {
-      const normalizedPhone = normalizeMoroccoPhone(phone);
-      values.push(normalizedPhone);
-      conditions.push(`o.customer_phone = $${values.length}`);
-    }
-
-    if (firebaseUid) {
-      values.push(firebaseUid);
-      conditions.push(`o.firebase_uid = $${values.length}`);
-    }
-    if (email) {
-      values.push(email.toLowerCase());
-      conditions.push(`LOWER(COALESCE(o.customer_email, '')) = $${values.length}`);
-    }
-    if (phone) {
-      const normalizedPhone = normalizeMoroccoPhone(phone);
-      values.push(normalizedPhone);
-      conditions.push(`o.customer_phone = $${values.length}`);
-    }
-    if (!conditions.length) {
-      throw new Error("Customer identifier is required");
-    }
-
-    console.log("CUSTOMER ORDERS REQUEST USER", supabaseUid || "anonymous");
-    const [ordersResult, activeOrdersResult] = await Promise.all([
-      dbPool.query(`
+    console.log("[Orders] Fetching for Supabase UID:", supabaseUid);
+    const ordersResult = await dbPool.query(`
       SELECT o.*
       FROM orders o
-      WHERE ${conditions.join(" OR ")}
+      WHERE o.supabase_uid = $1
       ORDER BY o.created_at DESC
-      LIMIT 50
-    `, values),
-      dbPool.query(`
-        SELECT COUNT(*)::int AS active_count
-        FROM orders
-        WHERE status IN ('new', 'accepted', 'preparing')
-      `)
-    ]);
-
-    console.log("CUSTOMER ORDERS COUNT", ordersResult.rows.length);
-
+      LIMIT 100
+    `, [supabaseUid]);
 
     const orderIds = ordersResult.rows.map(row => row.id);
-    let itemsByOrder = new Map();
-    if (orderIds.length) {
-      const itemsResult = await dbPool.query(`
-        SELECT *
-        FROM order_items
-        WHERE order_id = ANY($1::bigint[])
-        ORDER BY id ASC
+    if (orderIds.length === 0) return [];
+
+    const itemsResult = await dbPool.query(`
+      SELECT *
+      FROM order_items
+      WHERE order_id = ANY($1::int[])
+      ORDER BY id ASC
+    `, [orderIds]);
+
+    const itemsByOrder = new Map();
+    itemsResult.rows.forEach(item => {
+      if (!itemsByOrder.has(item.order_id)) itemsByOrder.set(item.order_id, []);
+      itemsByOrder.get(item.order_id).push(item);
+    });
+
+    return ordersResult.rows.map(order => ({
+      ...order,
+      items: itemsByOrder.get(order.id) || []
+    }));
+  });
+}
+
+    const orderIds = ordersResult.rows.map(row => row.id);
+    if (orderIds.length === 0) return [];
+
+    const itemsResult = await dbPool.query(`
+      SELECT *
+      FROM order_items
+      WHERE order_id = ANY($1::int[])
+      ORDER BY id ASC
+    `, [orderIds]);
+
+    const itemsByOrder = new Map();
+    itemsResult.rows.forEach(item => {
+      if (!itemsByOrder.has(item.order_id)) itemsByOrder.set(item.order_id, []);
+      itemsByOrder.get(item.order_id).push(item);
+    });
+
+    return ordersResult.rows.map(order => ({
+      ...order,
+      items: itemsByOrder.get(order.id) || []
+    }));
+  });
+}
+
+async function listAdminPromoCodes() {
+  return await withDatabase(async () => {
+    const { rows } = await dbPool.query("SELECT * FROM promo_codes ORDER BY created_at DESC");
+    return rows;
+  });
+}
+
+async function createPromoCode(data) {
+  return await withDatabase(async () => {
+    const { code, type, value, min_order_amount, max_discount, usage_limit, starts_at, ends_at, active } = data;
+    const { rows } = await dbPool.query(`
+      INSERT INTO promo_codes (
+        code, type, value, min_order_amount, max_discount, usage_limit, starts_at, ends_at, active
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING *
+    `, [
+      code.toUpperCase().trim(), 
+      type || 'percent', 
+      value, 
+      min_order_amount || 0, 
+      max_discount || null, 
+      usage_limit || null, 
+      starts_at || null, 
+      ends_at || null, 
+      active !== false
+    ]);
+    return rows[0];
+  });
+}
+
+async function updatePromoCode(id, data) {
+  return await withDatabase(async () => {
+    const { code, type, value, min_order_amount, max_discount, usage_limit, starts_at, ends_at, active } = data;
+    const { rows } = await dbPool.query(`
+      UPDATE promo_codes SET
+        code = $1, type = $2, value = $3, min_order_amount = $4, max_discount = $5,
+        usage_limit = $6, starts_at = $7, ends_at = $8, active = $9
+      WHERE id = $10
+      RETURNING *
+    `, [
+      code.toUpperCase().trim(), type, value, min_order_amount, max_discount,
+      usage_limit, starts_at, ends_at, active, id
+    ]);
+    return rows[0];
+  });
+}
+
+async function deletePromoCode(id) {
+  return await withDatabase(async () => {
+    await dbPool.query("DELETE FROM promo_codes WHERE id = $1", [id]);
+  });
+}
       `, [orderIds]);
       itemsByOrder = itemsResult.rows.reduce((map, row) => {
         const current = map.get(Number(row.order_id)) || [];
@@ -2838,7 +2918,80 @@ app.post("/api/notifications/clear-all", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
+app.get("/api/admin/promo-codes", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  const promos = await listAdminPromoCodes();
+  res.json({ promos });
+}));
+
+app.post("/api/admin/promo-codes", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  const promo = await createPromoCode(req.body);
+  res.status(201).json(promo);
+}));
+
+app.patch("/api/admin/promo-codes/:id", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  const promo = await updatePromoCode(Number(req.params.id), req.body);
+  res.json(promo);
+}));
+
+app.delete("/api/admin/promo-codes/:id", asyncHandler(async (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  await deletePromoCode(Number(req.params.id));
+  res.json({ success: true });
+}));
+
+app.post("/api/promo/validate", asyncHandler(async (req, res) => {
+  const { code, subtotal } = req.body;
+  if (!code) return res.status(400).json({ error: "CODE_REQUIRED" });
+  
+  const result = await dbPool.query(`
+    SELECT * FROM promo_codes 
+    WHERE code = $1 
+    AND active = true 
+    AND (starts_at IS NULL OR starts_at <= NOW())
+    AND (ends_at IS NULL OR ends_at >= NOW())
+  `, [code.toUpperCase().trim()]);
+  
+  if (result.rows.length === 0) {
+    return res.status(404).json({ error: "INVALID_CODE" });
+  }
+  
+  const promo = result.rows[0];
+  if (promo.usage_limit && promo.used_count >= promo.usage_limit) {
+    return res.status(400).json({ error: "USAGE_LIMIT_EXCEEDED" });
+  }
+  
+  if (subtotal < promo.min_order_amount) {
+    return res.status(400).json({ 
+      error: "MIN_AMOUNT_NOT_REACHED", 
+      minAmount: promo.min_order_amount 
+    });
+  }
+  
+  let discount = 0;
+  if (promo.type === "percent") {
+    discount = (subtotal * promo.value) / 100;
+    if (promo.max_discount) discount = Math.min(discount, promo.max_discount);
+  } else {
+    discount = promo.value;
+  }
+  
+  res.json({
+    ok: true,
+    promo: {
+      id: promo.id,
+      code: promo.code,
+      type: promo.type,
+      value: promo.value,
+      discount: Number(discount.toFixed(2))
+    }
+  });
+}));
+
 app.post("/api/device-token", asyncHandler(async (req, res) => {
+
   const { firebaseUid, phone, platform, token } = req.body;
   await upsertDeviceToken({ firebaseUid, phone, platform, token });
   res.json({ success: true });
@@ -2861,11 +3014,9 @@ app.post("/api/orders", authenticateToken, asyncHandler(async (req, res) => {
       message: settings.closedMessage
     });
   }
-  const isLegacyCustomerToken = req.user?.role === "customer" && req.user?.id;
   const order = normalizeOrderPayload({
     ...req.body,
-    customerId: isLegacyCustomerToken ? req.user.id : null,
-    supabaseUid: req.user?.id || null
+    supabaseUid: req.supabase_uid || (req.user?.app_metadata ? req.user.id : null)
   });
   const result = await createOrderRecord(order);
   console.log("ORDER SAVED FOR USER", { 
@@ -2878,13 +3029,8 @@ app.post("/api/orders", authenticateToken, asyncHandler(async (req, res) => {
 }));
 
 app.get("/api/orders/customer", authenticateToken, asyncHandler(async (req, res) => {
-  console.log("CUSTOMER ORDERS REQUEST USER", req.user?.id || req.supabase_uid);
-  const orders = await listCustomerOrders({
-    supabaseUid: req.user?.id || req.supabase_uid || null,
-    firebaseUid: req.query.firebaseUid,
-    email: req.query.email,
-    phone: req.query.phone
-  });
+  const supabaseUid = req.supabase_uid || (req.user?.app_metadata ? req.user.id : null);
+  const orders = await listCustomerOrders(supabaseUid);
   console.log("CUSTOMER ORDERS COUNT", orders?.length || 0);
   res.json({ orders });
 }));
@@ -3225,11 +3371,80 @@ async function handleNotifyRequest(payload) {
     }
   }));
 
-  const batchResponse = await admin.messaging().sendEach(messages);
-  return { 
-    success: true, 
-    count: batchResponse.successCount, 
-    failureCount: batchResponse.failureCount,
+  const expoTokens = [];
+  const fcmMessages = [];
+  
+  messages.forEach(m => {
+    if (m.token.startsWith("ExponentPushToken")) {
+      expoTokens.push({
+        to: m.token,
+        sound: "default",
+        title: m.notification.title,
+        body: m.notification.body,
+        data: m.data
+      });
+    } else {
+      fcmMessages.push(m);
+    }
+  });
+
+  console.log(`[Push] Sending to ${fcmMessages.length} FCM devices and ${expoTokens.length} Expo devices`);
+
+  let successCount = 0;
+  let failureCount = 0;
+
+  if (fcmMessages.length > 0) {
+    try {
+      const fcmRes = await admin.messaging().sendEach(fcmMessages);
+      successCount += fcmRes.successCount;
+      failureCount += fcmRes.failureCount;
+      console.log(`[Push] FCM Result: ${fcmRes.successCount} success, ${fcmRes.failureCount} failure`);
+    } catch (e) {
+      console.error("[Push] FCM send error", e);
+      failureCount += fcmMessages.length;
+    }
+  }
+
+  if (expoTokens.length > 0) {
+    try {
+      console.log(`[Push] Sending via Expo Push API to ${expoTokens.length} devices...`);
+      const expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(expoTokens)
+      });
+      const expoData = await expoRes.json();
+      
+      if (Array.isArray(expoData.data)) {
+        for (let i = 0; i < expoData.data.length; i++) {
+          const res = expoData.data[i];
+          if (res.status === "error") {
+            const token = expoTokens[i].to;
+            console.log(`[Push] Expo error for ${token}: ${res.message}`);
+            if (res.details?.error === 'DeviceNotRegistered') {
+              console.log(`[Push] Pruning invalid token: ${token}`);
+              await dbPool.query("DELETE FROM device_tokens WHERE token = $1", [token]);
+            }
+            failureCount++;
+          } else {
+            successCount++;
+          }
+        }
+      }
+      console.log(`[Push] Expo Result: ${successCount} success, ${failureCount} failure`);
+    } catch (e) {
+      console.error("[Push] Expo push API failure", e);
+      failureCount += expoTokens.length;
+    }
+  }
+
+  console.log("PUSH SEND RESULT", { successCount, failureCount, total: messages.length });
+  
+  return {
+    success: true,
+    count: successCount,
+    failureCount: failureCount,
     notification: savedNotification
   };
 }
+
