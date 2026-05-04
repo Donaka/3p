@@ -1994,28 +1994,7 @@ async function listCustomerOrders(supabaseUid) {
   });
 }
 
-    const orderIds = ordersResult.rows.map(row => row.id);
-    if (orderIds.length === 0) return [];
 
-    const itemsResult = await dbPool.query(`
-      SELECT *
-      FROM order_items
-      WHERE order_id = ANY($1::int[])
-      ORDER BY id ASC
-    `, [orderIds]);
-
-    const itemsByOrder = new Map();
-    itemsResult.rows.forEach(item => {
-      if (!itemsByOrder.has(item.order_id)) itemsByOrder.set(item.order_id, []);
-      itemsByOrder.get(item.order_id).push(item);
-    });
-
-    return ordersResult.rows.map(order => ({
-      ...order,
-      items: itemsByOrder.get(order.id) || []
-    }));
-  });
-}
 
 async function listAdminPromoCodes() {
   return await withDatabase(async () => {
