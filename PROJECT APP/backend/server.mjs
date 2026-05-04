@@ -2048,78 +2048,22 @@ async function deletePromoCode(id) {
     await dbPool.query("DELETE FROM promo_codes WHERE id = $1", [id]);
   });
 }
-      `, [orderIds]);
-      itemsByOrder = itemsResult.rows.reduce((map, row) => {
-        const current = map.get(Number(row.order_id)) || [];
-        current.push(mapOrderItemRow(row));
-        map.set(Number(row.order_id), current);
-        return map;
-      }, new Map());
-    }
+async function getCustomerOrderById(orderId, supabaseUid) {
+  if (!supabaseUid) throw new Error("Authentication required");
 
-    const activeOrders = Number(activeOrdersResult.rows[0]?.active_count || 0);
-    return ordersResult.rows.map(row => ({
-      ...applyOrderTracking(row, activeOrders, settings.preparationTimeBase),
-      items: itemsByOrder.get(Number(row.id)) || []
-    }));
-  });
-}
-
-async function getCustomerOrderById(orderId, { firebaseUid = "", email = "", phone = "", supabaseUid = "" } = {}) {
   return withDatabase(async () => {
-    const settings = await loadSettingsRowDirect();
-    const values = [orderId];
-    const conditions = ["o.id = $1"];
-    const identityClauses = [];
-    if (supabaseUid) {
-      values.push(supabaseUid);
-      identityClauses.push(`o.supabase_uid = $${values.length}`);
-    }
-    if (firebaseUid) {
-      values.push(firebaseUid);
-      identityClauses.push(`o.firebase_uid = $${values.length}`);
-    }
-    if (email) {
-      values.push(email.toLowerCase());
-      identityClauses.push(`LOWER(COALESCE(o.customer_email, '')) = $${values.length}`);
-    }
-    if (phone) {
-      values.push(phone);
-      identityClauses.push(`o.customer_phone = $${values.length}`);
-    }
-    if (!identityClauses.length) {
-      throw new Error("Customer identifier is required");
-    }
-    conditions.push(`(${identityClauses.join(" OR ")})`);
-
-    const [orderResult, activeOrdersResult] = await Promise.all([
-      dbPool.query(`
-        SELECT o.*
-        FROM orders o
-        WHERE ${conditions.join(" AND ")}
-        LIMIT 1
-      `, values),
-      dbPool.query(`
-        SELECT COUNT(*)::int AS active_count
-        FROM orders
-        WHERE status IN ('new', 'accepted', 'preparing')
-      `)
-    ]);
-
-    if (!orderResult.rows.length) return null;
-    const row = orderResult.rows[0];
-    const itemsResult = await dbPool.query(`
-      SELECT *
-      FROM order_items
-      WHERE order_id = $1
-      ORDER BY id ASC
-    `, [orderId]);
-    return {
-      ...applyOrderTracking(row, Number(activeOrdersResult.rows[0]?.active_count || 0), settings.preparationTimeBase),
-      items: itemsResult.rows.map(mapOrderItemRow)
-    };
+    const { rows } = await dbPool.query(`
+      SELECT o.*, 
+             (SELECT json_agg(oi.*) FROM order_items oi WHERE oi.order_id = o.id) as items
+      FROM orders o
+      WHERE o.id = $1 AND o.supabase_uid = $2
+    `, [orderId, supabaseUid]);
+    
+    if (rows.length === 0) return null;
+    return rows[0];
   });
 }
+
 
 function enrichNotification(notification) {
   const menu = readMenu();
@@ -3016,12 +2960,8 @@ app.get("/api/orders/customer", authenticateToken, asyncHandler(async (req, res)
 
 
 app.get("/api/orders/customer/:id", authenticateToken, asyncHandler(async (req, res) => {
-  const order = await getCustomerOrderById(Number(req.params.id), {
-    supabaseUid: req.user?.id || null,
-    firebaseUid: req.query.firebaseUid,
-    email: req.query.email,
-    phone: req.query.phone
-  });
+  const supabaseUid = req.supabase_uid || (req.user?.app_metadata ? req.user.id : null);
+  const order = await getCustomerOrderById(Number(req.params.id), supabaseUid);
   if (!order) return res.status(404).json({ error: "Not found" });
   res.json(order);
 }));
